@@ -291,6 +291,8 @@ function MapPage() {
 }
 
 function App() {
+  const [authenticated, setAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
   const [selectedPark, setSelectedPark] = useState(0);
   const [activePage, setActivePage] = useState("Overview");
   const [latestReading, setLatestReading] = useState(null);
@@ -394,6 +396,20 @@ function App() {
         </div>
       </>);
     }
+  }
+
+  if (!authenticated) {
+    return (
+      <div className="flex h-screen bg-white items-center justify-center">
+        <div className="text-center">
+          <div className="font-semibold text-xl mb-1">EcoAnalytics</div>
+          <div className="text-sm text-gray-400 mb-6">DFW ecosystem intelligence</div>
+          <input type="password" placeholder="Enter access code" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && passwordInput === "ecoanalytics2026") setAuthenticated(true); }} className="text-sm px-4 py-2 rounded-lg border border-gray-300 mb-3 w-64 block mx-auto" />
+          <button onClick={() => { if (passwordInput === "ecoanalytics2026") setAuthenticated(true); }} className="text-sm px-6 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700">Enter</button>
+          <div className="text-xs text-gray-400 mt-4">Access restricted during development</div>
+        </div>
+      </div>
+    );
   }
 
   return (
