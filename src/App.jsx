@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import jsPDF from "jspdf";
 import { supabase } from "./supabase";
 
 const parks = [
@@ -266,6 +267,229 @@ function MapPage() {
   </>);
 }
 
+function ReportsPage({ park, latestReading, latestAqi, waterData, speciesData, readings, aqiReadings }) {
+  const [generating, setGenerating] = useState(false);
+  const [generated, setGenerated] = useState(false);
+
+  const generatePDF = () => {
+    setGenerating(true);
+    const doc = new jsPDF();
+    const now = new Date();
+    const dateStr = now.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    const monthStr = now.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+    // Header
+    doc.setFillColor(15, 110, 86);
+    doc.rect(0, 0, 210, 35, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(22);
+    doc.setFont("helvetica", "bold");
+    doc.text("EcoAnalytics", 14, 18);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("DFW Ecosystem Intelligence Report", 14, 26);
+    doc.text(dateStr, 196, 18, { align: "right" });
+
+    // Park name
+    doc.setTextColor(4, 52, 44);
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text(park.name, 14, 48);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(100, 100, 100);
+    doc.text(park.city + ", Texas | Monthly Ecosystem Summary | " + monthStr, 14, 55);
+
+    // Divider
+    doc.setDrawColor(15, 110, 86);
+    doc.setLineWidth(0.5);
+    doc.line(14, 59, 196, 59);
+
+    // Section: Air & Climate
+    let y = 68;
+    doc.setTextColor(15, 110, 86);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Air & Climate", 14, y);
+    y += 8;
+    doc.setTextColor(60, 60, 60);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    const temp = latestReading ? Math.round(latestReading.temperature_f * 10) / 10 + " F" : "N/A";
+    const humidity = latestReading ? Math.round(latestReading.humidity_pct) + "%" : "N/A";
+    const wind = latestReading ? Math.round(latestReading.wind_speed_mph * 10) / 10 + " mph" : "N/A";
+    const conditions = latestReading ? latestReading.conditions : "N/A";
+    doc.text("Temperature: " + temp, 14, y);
+    doc.text("Humidity: " + humidity, 80, y);
+    doc.text("Wind: " + wind, 140, y);
+    y += 6;
+    doc.text("Conditions: " + conditions, 14, y);
+    doc.text("Readings collected: " + readings.length, 80, y);
+    y += 4;
+
+    // Section: Air Quality
+    y += 8;
+    doc.setTextColor(15, 110, 86);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Air Quality", 14, y);
+    y += 8;
+    doc.setTextColor(60, 60, 60);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    const aqi = latestAqi ? latestAqi.aqi : "N/A";
+    const aqiCat = latestAqi ? latestAqi.category : "N/A";
+    const pollutant = latestAqi ? latestAqi.pollutant : "N/A";
+    doc.text("Current AQI: " + aqi + " (" + aqiCat + ")", 14, y);
+    doc.text("Primary pollutant: " + pollutant, 100, y);
+    y += 6;
+    doc.text("AQI readings collected: " + aqiReadings.length, 14, y);
+
+    // AQI avg
+    if (aqiReadings.length > 0) {
+      const avg = Math.round(aqiReadings.reduce(function(s, r) { return s + r.aqi; }, 0) / aqiReadings.length);
+      doc.text("Average AQI this period: " + avg, 100, y);
+    }
+    y += 4;
+
+    // Section: Water Quality
+    y += 8;
+    doc.setTextColor(15, 110, 86);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Water Quality", 14, y);
+    y += 8;
+    doc.setTextColor(60, 60, 60);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    if (waterData && waterData.site_name) {
+      doc.text("Monitoring station: " + waterData.site_name, 14, y);
+      y += 6;
+      const flow = waterData.streamflow_cfs ? Math.round(waterData.streamflow_cfs) + " cfs" : "N/A";
+      const gage = waterData.gage_height_ft ? Math.round(waterData.gage_height_ft * 10) / 10 + " ft" : "N/A";
+      const precip = waterData.precipitation_in !== null ? waterData.precipitation_in + " in" : "N/A";
+      doc.text("Streamflow: " + flow, 14, y);
+      doc.text("Gage height: " + gage, 80, y);
+      doc.text("Precipitation: " + precip, 140, y);
+    } else {
+      doc.text("No USGS monitoring station within range of this park.", 14, y);
+    }
+    y += 4;
+
+    // Section: Wildlife & Biodiversity
+    y += 8;
+    doc.setTextColor(15, 110, 86);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Wildlife & Biodiversity", 14, y);
+    y += 8;
+    doc.setTextColor(60, 60, 60);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    if (speciesData) {
+      doc.text("Total species observed: " + speciesData.species_count.toLocaleString(), 14, y);
+      doc.text("Data source: iNaturalist (5km radius)", 100, y);
+      y += 6;
+      const recentSpecies = speciesData.recent_species || [];
+      if (recentSpecies.length > 0) {
+        doc.text("Recent notable species: " + recentSpecies.slice(0, 5).join(", "), 14, y);
+      }
+    } else {
+      doc.text("No species observation data available for this park.", 14, y);
+    }
+    y += 4;
+
+    // Section: Data Summary
+    y += 10;
+    doc.setDrawColor(15, 110, 86);
+    doc.setLineWidth(0.5);
+    doc.line(14, y, 196, y);
+    y += 8;
+    doc.setTextColor(15, 110, 86);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Data Collection Summary", 14, y);
+    y += 8;
+    doc.setTextColor(60, 60, 60);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    const totalReadings = readings.length + aqiReadings.length;
+    doc.text("Total data points collected: " + totalReadings, 14, y);
+    y += 6;
+    doc.text("Weather readings: " + readings.length, 14, y);
+    doc.text("AQI readings: " + aqiReadings.length, 80, y);
+    y += 6;
+    doc.text("Data sources: OpenWeatherMap, EPA AirNow, USGS Water Services, iNaturalist", 14, y);
+
+    // Footer
+    doc.setFillColor(15, 110, 86);
+    doc.rect(0, 277, 210, 20, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(8);
+    doc.text("Generated by EcoAnalytics | DFW Ecosystem Intelligence Platform | eco-analytics.vercel.app", 105, 285, { align: "center" });
+    doc.text("Report generated on " + dateStr + " | Data is collected from federal and scientific open data sources", 105, 290, { align: "center" });
+
+    // Save
+    const filename = park.name.replace(/\s+/g, "_") + "_Ecosystem_Report_" + now.toISOString().slice(0, 10) + ".pdf";
+    doc.save(filename);
+    setGenerating(false);
+    setGenerated(true);
+    setTimeout(function() { setGenerated(false); }, 3000);
+  };
+
+  const totalReadings = readings.length + aqiReadings.length;
+
+  return (<>
+    <PageHeader title="Reports & exports" subtitle="Generate ecosystem health reports for grant applications and city reporting" />
+    <div className="border border-emerald-200 rounded-xl p-8 bg-white mb-5">
+      <div className="flex items-start gap-6">
+        <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center flex-shrink-0">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M14 2H6C5.4 2 5 2.4 5 3V21C5 21.6 5.4 22 6 22H18C18.6 22 19 21.6 19 21V7L14 2Z" stroke="#0F6E56" strokeWidth="1.5" strokeLinejoin="round"/><path d="M14 2V7H19" stroke="#0F6E56" strokeWidth="1.5" strokeLinejoin="round"/><path d="M9 13H15M9 17H13" stroke="#0F6E56" strokeWidth="1.5" strokeLinecap="round"/></svg>
+        </div>
+        <div className="flex-1">
+          <h3 className="text-base font-bold text-gray-900 mb-1">Monthly ecosystem health report</h3>
+          <p className="text-sm text-gray-500 mb-4">A one-page PDF summary of all ecosystem metrics for {park.name}. Includes air quality, water quality, wildlife biodiversity, and weather data. Perfect for grant applications, city council presentations, and stakeholder updates.</p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            <span className="text-xs bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full border border-emerald-100">Air & climate data</span>
+            <span className="text-xs bg-cyan-50 text-cyan-700 px-3 py-1 rounded-full border border-cyan-100">Water quality</span>
+            <span className="text-xs bg-teal-50 text-teal-700 px-3 py-1 rounded-full border border-teal-100">Wildlife counts</span>
+            <span className="text-xs bg-blue-50 text-blue-700 px-3 py-1 rounded-full border border-blue-100">AQI readings</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={generatePDF} disabled={generating} className={`text-sm px-6 py-2.5 rounded-xl font-medium transition-colors ${generating ? "bg-gray-200 text-gray-400 cursor-not-allowed" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}>
+              {generating ? "Generating..." : "Generate PDF report"}
+            </button>
+            {generated && <span className="text-sm text-emerald-600 font-medium">Downloaded!</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+      <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 text-center">
+        <div className="text-2xl font-bold text-emerald-800">{totalReadings}</div>
+        <div className="text-xs text-emerald-600 mt-1">Total data points</div>
+      </div>
+      <div className="bg-cyan-50 border border-cyan-100 rounded-xl p-4 text-center">
+        <div className="text-2xl font-bold text-cyan-800">4</div>
+        <div className="text-xs text-cyan-600 mt-1">Data sources</div>
+      </div>
+      <div className="bg-teal-50 border border-teal-100 rounded-xl p-4 text-center">
+        <div className="text-2xl font-bold text-teal-800">1</div>
+        <div className="text-xs text-teal-600 mt-1">Page report</div>
+      </div>
+    </div>
+
+    <SectionCard title="What is included in the report">
+      <div className="text-sm text-gray-500 leading-relaxed space-y-3">
+        <p>The monthly ecosystem health report compiles all collected data into a professional one-page PDF that park managers can use for grant applications, city council presentations, and stakeholder updates.</p>
+        <p>Each report includes current readings and historical context for temperature, humidity, wind, air quality index, water streamflow, gage height, precipitation, and biodiversity species counts with notable species lists.</p>
+        <p>Reports are branded with the park name and generation date, and include data source attribution for credibility with grant reviewers.</p>
+      </div>
+    </SectionCard>
+  </>);
+}
+
 function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
@@ -353,7 +577,7 @@ function App() {
       case "Vegetation": return <ComingSoonPage title="Vegetation & habitat" description="NDVI satellite imagery integration is planned for Phase 2. This will show canopy health, vegetation stress, and seasonal change." />;
       case "Visitor impact": return <ComingSoonPage title="Visitor impact" description="Visitor traffic estimation and its correlation with ecosystem health metrics. Coming in a future release." />;
       case "Map": return <MapPage />;
-      case "Reports": return <ComingSoonPage title="Reports & exports" description="Automated monthly PDF ecosystem health reports for grant applications and city reporting. Coming in Phase 4." />;
+      case "Reports": return <ReportsPage park={park} latestReading={latestReading} latestAqi={latestAqi} waterData={waterData} speciesData={speciesData} readings={readings} aqiReadings={aqiReadings} />;
       case "Settings": return <ComingSoonPage title="Settings" description="Account settings, notification preferences, and park management. Coming soon." />;
       default: return (<>
         <div className="flex justify-between items-center mb-6">
