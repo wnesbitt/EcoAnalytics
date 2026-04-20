@@ -394,56 +394,295 @@ function App() {
   if (invasiveCount > 5) alerts.push({type:"warning",title:invasiveCount+" introduced species detected",description:"Monitor invasive species in this area."});
 
   function generatePDF() {
-    const doc = new jsPDF(); const now = new Date();
+    const doc = new jsPDF();
+    const now = new Date();
     const dateStr = now.toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"});
-    doc.setFillColor(15,110,86); doc.rect(0,0,210,35,"F");
-    doc.setTextColor(255,255,255); doc.setFontSize(22); doc.setFont("helvetica","bold");
-    doc.text("EcoAnalytics",14,18); doc.setFontSize(10); doc.setFont("helvetica","normal");
-    doc.text("Ecosystem Intelligence Report",14,26); doc.text(dateStr,196,18,{align:"right"});
-    doc.setTextColor(4,52,44); doc.setFontSize(16); doc.setFont("helvetica","bold"); doc.text(loc.name,14,48);
-    doc.setFontSize(10); doc.setFont("helvetica","normal"); doc.setTextColor(100,100,100);
-    doc.text("Lat: "+loc.latitude.toFixed(4)+" | Lon: "+loc.longitude.toFixed(4),14,55);
-    doc.setDrawColor(15,110,86); doc.line(14,59,196,59);
-    let y = 68;
-    if (weather && weather.main) {
-      doc.setTextColor(15,110,86); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Air & Climate",14,y); y+=8;
-      doc.setTextColor(60,60,60); doc.setFontSize(10); doc.setFont("helvetica","normal");
-      doc.text("Temperature: "+temp+" F",14,y); doc.text("Humidity: "+humidity+"%",80,y); doc.text("Wind: "+wind+" mph",140,y); y+=6;
-      doc.text("Conditions: "+conditions,14,y); y+=10;
+    const timeStr = now.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"});
+    const PAGE_W = 210, PAGE_H = 297, M = 16;
+    const GREEN = [15,110,86], DARK = [35,35,35], MED = [100,100,100];
+    const taxaColorsPDF = {Aves:[59,130,246],Plantae:[15,110,86],Insecta:[239,159,39],Mammalia:[216,90,48],Reptilia:[139,92,246],Amphibia:[6,182,212],Fungi:[236,72,153],Arachnida:[249,115,22],Mollusca:[20,184,166],Actinopterygii:[2,132,199]};
+
+    let score = 0, maxScore = 0;
+    const scoreDetails = [];
+    if (aqiVal !== "--") { maxScore += 25; const pts = aqiVal <= 50 ? 25 : aqiVal <= 100 ? 18 : aqiVal <= 150 ? 10 : 5; score += pts; scoreDetails.push({label:"Air Quality",points:pts,max:25,value:"AQI "+aqiVal}); }
+    if (species && species.total > 0) { maxScore += 25; const pts = species.total > 2000 ? 25 : species.total > 1000 ? 20 : species.total > 500 ? 15 : species.total > 100 ? 10 : 5; score += pts; scoreDetails.push({label:"Biodiversity",points:pts,max:25,value:species.total.toLocaleString()+" species"}); }
+    if (species && species.total > 0) { maxScore += 25; const invCount = invasives ? invasives.total : 0; const nativeRatio = Math.max(0, 1 - (invCount / species.total)); const pts = Math.round(nativeRatio * 25); score += pts; scoreDetails.push({label:"Native Species Ratio",points:pts,max:25,value:Math.round(nativeRatio*100)+"% native"}); }
+    maxScore += 25;
+    if (water && water.site_name) { score += 25; scoreDetails.push({label:"Water Monitoring",points:25,max:25,value:"Active station"}); }
+    else scoreDetails.push({label:"Water Monitoring",points:0,max:25,value:"No station"});
+
+    const finalScore = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
+    const scoreCategory = finalScore >= 80 ? "Excellent" : finalScore >= 60 ? "Good" : finalScore >= 40 ? "Fair" : "Needs Attention";
+    const scoreColor = finalScore >= 80 ? [34,150,85] : finalScore >= 60 ? [15,110,86] : finalScore >= 40 ? [200,140,40] : [180,50,50];
+    const interpretation = finalScore >= 80 ? "This location shows excellent ecosystem health markers. Continue current monitoring practices and consider this site as a reference baseline for comparable habitats." : finalScore >= 60 ? "This location shows good overall ecosystem health with some areas for monitoring. Regular observation and proactive management will help maintain conditions." : finalScore >= 40 ? "This location shows fair ecosystem health indicators. Consider targeted interventions such as invasive species management or additional monitoring." : "This location shows ecosystem indicators that warrant attention. Review introduced species presence and consult local ecological specialists for recommendations.";
+
+    function rule(y, thick) { doc.setDrawColor(210,210,210); doc.setLineWidth(thick || 0.2); doc.line(M, y, PAGE_W-M, y); }
+    function accent(y, w) { doc.setFillColor(GREEN[0],GREEN[1],GREEN[2]); doc.rect(M, y, w || 14, 1.2, "F"); }
+    function masthead() {
+      doc.setFillColor(GREEN[0],GREEN[1],GREEN[2]); doc.rect(0,0,PAGE_W,2.5,"F");
+      doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]); doc.setFontSize(7.5); doc.setFont("helvetica","bold");
+      doc.text("ECOANALYTICS",M,9.5);
+      doc.setTextColor(130,130,130); doc.setFont("helvetica","normal");
+      doc.text("ECOSYSTEM INTELLIGENCE REPORT",PAGE_W-M,9.5,{align:"right"});
+      rule(12.5, 0.15);
     }
-    if (aqiVal !== "--") {
-      doc.setTextColor(15,110,86); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Air Quality",14,y); y+=8;
-      doc.setTextColor(60,60,60); doc.setFontSize(10); doc.setFont("helvetica","normal");
-      doc.text("AQI: "+aqiVal+" ("+aqiCat+")",14,y); doc.text("Pollutant: "+pollutant,100,y); y+=10;
+    function footerLine(pageNum) {
+      rule(PAGE_H-13, 0.15);
+      doc.setTextColor(140,140,140); doc.setFontSize(7); doc.setFont("helvetica","normal");
+      doc.text("eco-analytics.vercel.app",M,PAGE_H-7);
+      doc.text(dateStr+"  ·  "+timeStr,PAGE_W/2,PAGE_H-7,{align:"center"});
+      doc.text("Page "+pageNum+" of 2",PAGE_W-M,PAGE_H-7,{align:"right"});
     }
+
+    masthead(); footerLine(1);
+    doc.setTextColor(130,130,130); doc.setFontSize(8.5); doc.setFont("times","italic");
+    doc.text("An ecosystem health assessment of",M,21);
+    doc.setTextColor(DARK[0],DARK[1],DARK[2]); doc.setFontSize(30); doc.setFont("times","bold");
+    const locLines = doc.splitTextToSize(loc.name, 130);
+    doc.text(locLines,M,36);
+    const afterLoc = 36 + (locLines.length-1)*10;
+    doc.setTextColor(130,130,130); doc.setFontSize(7.5); doc.setFont("helvetica","normal");
+    const meta = loc.latitude.toFixed(4)+"° N  ·  "+Math.abs(loc.longitude).toFixed(4)+"° W  ·  ASSESSED "+dateStr.toUpperCase();
+    doc.text(meta,M,afterLoc+6);
+    rule(afterLoc+11, 0.3);
+
+    const topY = Math.max(54, afterLoc+16);
+    doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]); doc.setFontSize(7.5); doc.setFont("helvetica","bold");
+    doc.text("EXECUTIVE SUMMARY",M,topY);
+    doc.setTextColor(45,45,45); doc.setFontSize(9.5); doc.setFont("times","normal");
+    const summaryParts = [];
+    if (weather && weather.main) summaryParts.push("Current conditions show "+conditions+" with a temperature of "+temp+"°F and "+humidity+"% humidity.");
+    if (aqiVal !== "--") summaryParts.push("Air quality is rated "+aqiCat+" (AQI "+aqiVal+") with "+pollutant+" as the primary pollutant.");
+    if (species && species.total > 0) summaryParts.push("iNaturalist records "+species.total.toLocaleString()+" species observed within a 5km radius across "+Object.keys(species.taxa).length+" taxonomic groups.");
+    if (invasives && invasives.total > 0 && species) summaryParts.push("Of these, "+invasives.total+" are classified as introduced (non-native) species, approximately "+Math.round((invasives.total/species.total)*100)+"% of observed biodiversity.");
+    if (water && water.site_name) summaryParts.push("USGS water monitoring is active at "+water.site_name+(water.streamflow?" with streamflow at "+Math.round(water.streamflow)+" cfs":"")+".");
+    const sumLines = doc.splitTextToSize(summaryParts.join(" "), 118);
+    doc.text(sumLines, M, topY+6);
+
+    doc.setFillColor(scoreColor[0],scoreColor[1],scoreColor[2]);
+    doc.circle(168, topY+18, 18, "F");
+    doc.setTextColor(255,255,255); doc.setFontSize(30); doc.setFont("times","bold");
+    doc.text(String(finalScore), 168, topY+22, {align:"center"});
+    doc.setTextColor(DARK[0],DARK[1],DARK[2]); doc.setFontSize(7.5); doc.setFont("helvetica","bold");
+    doc.text("HEALTH SCORE / 100", 168, topY+43, {align:"center"});
+    doc.setTextColor(100,100,100); doc.setFont("helvetica","normal"); doc.setFontSize(8);
+    doc.text(scoreCategory.toUpperCase(), 168, topY+49, {align:"center"});
+
+    let stripY = Math.max(125, topY + 50);
+    rule(stripY-4, 0.15);
+    rule(stripY+22, 0.15);
+    const metrics = [
+      {label:"TEMPERATURE", value:temp+"°", sub:"Fahrenheit"},
+      {label:"HUMIDITY", value:humidity+"%", sub:"Relative"},
+      {label:"AQI", value:String(aqiVal), sub:aqiCat==="--"?"N/A":aqiCat},
+      {label:"SPECIES", value:species?species.total.toLocaleString():"--", sub:"iNaturalist"},
+      {label:"PLANTS", value:plants?plants.total.toLocaleString():"--", sub:"iNaturalist"},
+      {label:"INTRODUCED", value:invasives?invasives.total.toLocaleString():"--", sub:"Non-native"}
+    ];
+    const metricW = (PAGE_W - 2*M) / metrics.length;
+    metrics.forEach(function(m, i) {
+      const mx = M + i*metricW + 2;
+      doc.setTextColor(140,140,140); doc.setFontSize(6.2); doc.setFont("helvetica","bold");
+      doc.text(m.label,mx,stripY);
+      doc.setTextColor(DARK[0],DARK[1],DARK[2]); doc.setFontSize(15); doc.setFont("times","bold");
+      doc.text(m.value,mx,stripY+10);
+      doc.setTextColor(150,150,150); doc.setFontSize(6.8); doc.setFont("helvetica","italic");
+      doc.text(m.sub,mx,stripY+16);
+      if (i < metrics.length-1) { doc.setDrawColor(225,225,225); doc.setLineWidth(0.12); doc.line(mx+metricW-4, stripY-2, mx+metricW-4, stripY+19); }
+    });
+
+    let yB = stripY + 35;
+    accent(yB-2, 14);
+    doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]); doc.setFontSize(8.5); doc.setFont("helvetica","bold");
+    doc.text("HEALTH SCORE BREAKDOWN",M,yB+5);
+    yB += 12;
+    scoreDetails.forEach(function(d) {
+      doc.setTextColor(DARK[0],DARK[1],DARK[2]); doc.setFontSize(9); doc.setFont("helvetica","bold");
+      doc.text(d.label,M,yB);
+      doc.setFont("helvetica","normal"); doc.setTextColor(140,140,140); doc.setFontSize(7.5);
+      doc.text(d.value,M+55,yB);
+      doc.setFont("times","bold"); doc.setFontSize(9.5); doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]);
+      doc.text(d.points+"/"+d.max,PAGE_W-M,yB,{align:"right"});
+      const barY = yB+1.5;
+      doc.setFillColor(238,238,238); doc.rect(M,barY,PAGE_W-2*M,1.3,"F");
+      doc.setFillColor(GREEN[0],GREEN[1],GREEN[2]); doc.rect(M,barY,(PAGE_W-2*M)*(d.points/d.max),1.3,"F");
+      yB += 10;
+    });
+
+    yB += 6;
+    doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]); doc.setFontSize(8.5); doc.setFont("helvetica","bold");
+    doc.text("INTERPRETATION",M,yB);
+    yB += 5;
+    doc.setTextColor(60,60,60); doc.setFontSize(10); doc.setFont("times","italic");
+    const intLines = doc.splitTextToSize("“"+interpretation+"”", PAGE_W-2*M);
+    doc.text(intLines,M,yB);
+
+    doc.addPage();
+    masthead(); footerLine(2);
+    doc.setTextColor(130,130,130); doc.setFontSize(8.5); doc.setFont("times","italic");
+    doc.text("The detailed findings",M,21);
+    doc.setTextColor(DARK[0],DARK[1],DARK[2]); doc.setFontSize(22); doc.setFont("times","bold");
+    doc.text("Detailed Findings",M,36);
+    rule(43, 0.3);
+
+    const colW = (PAGE_W - 2*M - 10) / 3;
+    const c1X = M, c2X = M+colW+5, c3X = M+2*(colW+5);
+    const colTop = 52;
+
+    function colHead(title, x, y) {
+      accent(y-2, 10);
+      doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]); doc.setFontSize(7.5); doc.setFont("helvetica","bold");
+      doc.text(title.toUpperCase(),x,y+5);
+    }
+    function stat(label, value, x, y, w) {
+      doc.setTextColor(130,130,130); doc.setFontSize(7); doc.setFont("helvetica","normal");
+      doc.text(label,x,y);
+      doc.setTextColor(40,40,40); doc.setFontSize(8); doc.setFont("helvetica","bold");
+      doc.text(value,x+w-2,y,{align:"right"});
+    }
+
+    colHead("Air & Climate", c1X, colTop);
+    let y1 = colTop + 12;
+    doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]); doc.setFontSize(30); doc.setFont("times","bold");
+    doc.text(String(aqiVal),c1X,y1+8);
+    doc.setTextColor(100,100,100); doc.setFontSize(7.5); doc.setFont("helvetica","normal");
+    doc.text("AQI  ·  "+(aqiCat==="--"?"Not available":aqiCat),c1X,y1+13);
+    y1 += 22;
+    const climate = [
+      {label:"Temperature", value:temp+"°F"},
+      {label:"Feels Like", value:feelsLike+"°F"},
+      {label:"Humidity", value:humidity+"%"},
+      {label:"Wind", value:wind+" mph"},
+      {label:"Cloud Cover", value:(weather&&weather.clouds?weather.clouds.all:0)+"%"},
+    ];
+    climate.forEach(function(s){ stat(s.label, s.value, c1X, y1, colW); y1 += 4.8; });
+    y1 += 2;
+    doc.setTextColor(90,90,90); doc.setFontSize(7); doc.setFont("times","italic");
+    const condLn = doc.splitTextToSize("Conditions: "+conditions+".", colW);
+    doc.text(condLn,c1X,y1);
+
+    colHead("Water Quality", c2X, colTop);
+    let y2 = colTop + 12;
     if (water && water.site_name) {
-      doc.setTextColor(15,110,86); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Water Quality",14,y); y+=8;
-      doc.setTextColor(60,60,60); doc.setFontSize(10); doc.setFont("helvetica","normal");
-      doc.text("Station: "+water.site_name,14,y); y+=6;
-      doc.text("Flow: "+(water.streamflow||"N/A")+" cfs",14,y); doc.text("Gage: "+(water.gage?Math.round(water.gage*10)/10:"N/A")+" ft",80,y); y+=10;
+      doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]); doc.setFontSize(30); doc.setFont("times","bold");
+      doc.text(water.streamflow?String(Math.round(water.streamflow)):"--",c2X,y2+8);
+      doc.setTextColor(100,100,100); doc.setFontSize(7.5); doc.setFont("helvetica","normal");
+      doc.text("CFS  ·  Streamflow",c2X,y2+13);
+      y2 += 22;
+      stat("Gage Height",(water.gage?Math.round(water.gage*10)/10:"--")+" ft", c2X, y2, colW); y2+=4.8;
+      stat("Precipitation",(water.precip!==null?water.precip:"--")+" in", c2X, y2, colW); y2+=4.8;
+      y2 += 3;
+      doc.setTextColor(90,90,90); doc.setFontSize(6.8); doc.setFont("times","italic");
+      const stLn = doc.splitTextToSize("Station: "+water.site_name, colW);
+      doc.text(stLn,c2X,y2);
+    } else {
+      doc.setTextColor(150,150,150); doc.setFontSize(9.5); doc.setFont("times","italic");
+      const noLn = doc.splitTextToSize("No USGS monitoring station within range of this location.", colW);
+      doc.text(noLn,c2X,y2+8);
     }
+
+    colHead("Introduced Species", c3X, colTop);
+    let y3 = colTop + 12;
+    const invTotal = invasives ? invasives.total : 0;
+    const invRGB = invTotal > 0 ? [180,50,50] : [34,150,85];
+    doc.setTextColor(invRGB[0],invRGB[1],invRGB[2]); doc.setFontSize(30); doc.setFont("times","bold");
+    doc.text(String(invTotal),c3X,y3+8);
+    doc.setTextColor(100,100,100); doc.setFontSize(7.5); doc.setFont("helvetica","normal");
+    doc.text("Non-native species",c3X,y3+13);
+    y3 += 22;
+    if (invasives && invasives.species.length > 0) {
+      invasives.species.slice(0,5).forEach(function(s) {
+        doc.setTextColor(40,40,40); doc.setFontSize(7); doc.setFont("helvetica","bold");
+        const nm = s.name.length > 28 ? s.name.substring(0,26)+"…" : s.name;
+        doc.text(nm,c3X,y3);
+        doc.setTextColor(140,140,140); doc.setFont("helvetica","normal");
+        doc.text(String(s.count),c3X+colW-2,y3,{align:"right"});
+        y3 += 5;
+      });
+    } else {
+      doc.setTextColor(34,150,85); doc.setFontSize(8); doc.setFont("times","italic");
+      const nIn = doc.splitTextToSize("No introduced species detected in this area.", colW);
+      doc.text(nIn, c3X, y3);
+    }
+
+    let yW = 128;
+    accent(yW-2, 14);
+    doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]); doc.setFontSize(9); doc.setFont("helvetica","bold");
+    doc.text("WILDLIFE & BIODIVERSITY",M,yW+5);
+    doc.setTextColor(DARK[0],DARK[1],DARK[2]); doc.setFontSize(16); doc.setFont("times","bold");
+    doc.text(species?species.total.toLocaleString():"--",PAGE_W-M,yW+5,{align:"right"});
+    doc.setTextColor(130,130,130); doc.setFontSize(6.5); doc.setFont("helvetica","normal");
+    doc.text("TOTAL SPECIES OBSERVED",PAGE_W-M,yW+9,{align:"right"});
+    yW += 16;
+
     if (species && species.total > 0) {
-      doc.setTextColor(15,110,86); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Wildlife & Biodiversity",14,y); y+=8;
-      doc.setTextColor(60,60,60); doc.setFontSize(10); doc.setFont("helvetica","normal");
-      doc.text("Species: "+species.total.toLocaleString(),14,y); y+=6;
-      if (species.names.length > 0) doc.text("Notable: "+species.names.slice(0,5).join(", "),14,y); y+=10;
+      const chartW = (PAGE_W - 2*M - 12) / 2;
+      doc.setTextColor(130,130,130); doc.setFontSize(6.5); doc.setFont("helvetica","bold");
+      doc.text("BY TAXONOMIC GROUP",M,yW);
+      let cY = yW + 5;
+      const sortedTaxa = Object.entries(species.taxa).sort(function(a,b){return b[1]-a[1];}).slice(0,6);
+      const maxC = Math.max.apply(null, sortedTaxa.map(function(t){return t[1];}));
+      sortedTaxa.forEach(function(t) {
+        doc.setTextColor(50,50,50); doc.setFontSize(7); doc.setFont("helvetica","normal");
+        doc.text(t[0],M,cY);
+        doc.setFont("helvetica","bold"); doc.text(String(t[1]),M+chartW-2,cY,{align:"right"});
+        const barY = cY+1.2; doc.setFillColor(240,240,240); doc.rect(M+22,barY,chartW-30,1.2,"F");
+        const c = taxaColorsPDF[t[0]] || [107,114,128];
+        doc.setFillColor(c[0],c[1],c[2]); doc.rect(M+22,barY,(chartW-30)*(t[1]/maxC),1.2,"F");
+        cY += 5;
+      });
+
+      const listX = M + chartW + 12;
+      doc.setTextColor(130,130,130); doc.setFontSize(6.5); doc.setFont("helvetica","bold");
+      doc.text("NOTABLE SPECIES",listX,yW);
+      let lY = yW + 5;
+      if (species.items.length > 0) {
+        const perCol = 6;
+        species.items.slice(0,12).forEach(function(s,i) {
+          const col = Math.floor(i/perCol);
+          const row = i % perCol;
+          const px = listX + col*(chartW/2);
+          const py = yW + 5 + row*5;
+          doc.setTextColor(50,50,50); doc.setFontSize(6.8); doc.setFont("helvetica","normal");
+          const nm = s.name.length > 20 ? s.name.substring(0,18)+"…" : s.name;
+          doc.text("· "+nm,px,py);
+        });
+      }
     }
-    if (plants && plants.total > 0) {
-      doc.setTextColor(15,110,86); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Vegetation",14,y); y+=8;
-      doc.setTextColor(60,60,60); doc.setFontSize(10); doc.setFont("helvetica","normal");
-      doc.text("Plant species: "+plants.total.toLocaleString(),14,y); y+=6;
-      if (plants.plants.length > 0) doc.text("Notable: "+plants.plants.slice(0,5).map(function(p){return p.name;}).join(", "),14,y); y+=10;
+
+    let yV = 195;
+    accent(yV-2, 14);
+    doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]); doc.setFontSize(9); doc.setFont("helvetica","bold");
+    doc.text("VEGETATION",M,yV+5);
+    doc.setTextColor(DARK[0],DARK[1],DARK[2]); doc.setFontSize(16); doc.setFont("times","bold");
+    doc.text(plants?plants.total.toLocaleString():"--",PAGE_W-M,yV+5,{align:"right"});
+    doc.setTextColor(130,130,130); doc.setFontSize(6.5); doc.setFont("helvetica","normal");
+    doc.text("PLANT SPECIES",PAGE_W-M,yV+9,{align:"right"});
+    yV += 16;
+
+    if (plants && plants.plants.length > 0) {
+      const plantColW = (PAGE_W - 2*M) / 3;
+      plants.plants.slice(0,12).forEach(function(p,i) {
+        const col = i % 3, row = Math.floor(i/3);
+        const px = M + col*plantColW, py = yV + row*5;
+        doc.setTextColor(50,50,50); doc.setFontSize(6.8); doc.setFont("helvetica","normal");
+        const nm = p.name.length > 25 ? p.name.substring(0,23)+"…" : p.name;
+        doc.text("· "+nm,px,py);
+      });
     }
-    if (invasives && invasives.total > 0) {
-      doc.setTextColor(15,110,86); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Introduced Species Alert",14,y); y+=8;
-      doc.setTextColor(60,60,60); doc.setFontSize(10); doc.setFont("helvetica","normal");
-      doc.text(invasives.total+" introduced species detected in monitoring area",14,y); y+=6;
-      if (invasives.species.length > 0) doc.text("Top: "+invasives.species.slice(0,5).map(function(s){return s.name;}).join(", "),14,y);
-    }
-    doc.setFillColor(15,110,86); doc.rect(0,277,210,20,"F");
-    doc.setTextColor(255,255,255); doc.setFontSize(8);
-    doc.text("Generated by EcoAnalytics | eco-analytics.vercel.app",105,287,{align:"center"});
-    doc.save(loc.name.replace(/\s+/g,"_")+"_Report_"+now.toISOString().slice(0,10)+".pdf");
+
+    let yF = 255;
+    rule(yF, 0.3);
+    yF += 4;
+    doc.setTextColor(120,120,120); doc.setFontSize(6.5); doc.setFont("helvetica","bold");
+    doc.text("METHODOLOGY  ·  DATA SOURCES",M,yF);
+    yF += 4;
+    doc.setFont("helvetica","normal"); doc.setFontSize(6.8); doc.setTextColor(100,100,100);
+    const methodText = "Data aggregated live from federal and open-source APIs. Weather: OpenWeatherMap. Air Quality: EPA AirNow (25km radius). Biodiversity: iNaturalist citizen science (5km radius). Water: USGS Water Services. Health score computed from weighted composite of air quality, biodiversity, native species ratio, and water monitoring availability. Observation counts reflect reported sightings, not absolute population density.";
+    const mLines = doc.splitTextToSize(methodText, PAGE_W - 2*M);
+    doc.text(mLines, M, yF);
+
+    doc.save(loc.name.replace(/\s+/g,"_")+"_Ecosystem_Report_"+now.toISOString().slice(0,10)+".pdf");
   }
 
   function renderPage() {
