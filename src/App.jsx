@@ -11,14 +11,19 @@ L.Icon.Default.mergeOptions({
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
 
-const WEATHER_KEY = "4c705b525d3a948e813bc54a52d775e8";
-const AIRNOW_KEY = "8AB5D0CF-5115-4D34-9382-92AF9AFFD337";
-
 async function fetchLiveWeather(lat, lon) {
-  try { const r = await fetch("https://api.openweathermap.org/data/2.5/weather?lat="+lat+"&lon="+lon+"&appid="+WEATHER_KEY+"&units=imperial"); return await r.json(); } catch(e) { return null; }
+  try {
+    const { data, error } = await supabase.functions.invoke("weather", { body: { lat, lon } });
+    if (error) return null;
+    return data;
+  } catch(e) { return null; }
 }
 async function fetchLiveAqi(lat, lon) {
-  try { const r = await fetch("https://www.airnowapi.org/aq/observation/latLong/current/?format=application/json&latitude="+lat+"&longitude="+lon+"&distance=25&API_KEY="+AIRNOW_KEY); return await r.json(); } catch(e) { return []; }
+  try {
+    const { data, error } = await supabase.functions.invoke("aqi", { body: { lat, lon } });
+    if (error) return [];
+    return Array.isArray(data) ? data : [];
+  } catch(e) { return []; }
 }
 async function fetchLiveSpecies(lat, lon) {
   try {
