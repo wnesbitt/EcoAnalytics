@@ -12,14 +12,68 @@ L.Icon.Default.mergeOptions({
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
 
-const WEATHER_KEY = "4c705b525d3a948e813bc54a52d775e8";
-const AIRNOW_KEY = "8AB5D0CF-5115-4D34-9382-92AF9AFFD337";
-
 async function fetchLiveWeather(lat, lon) {
-  try { const r = await fetch("https://api.openweathermap.org/data/2.5/weather?lat="+lat+"&lon="+lon+"&appid="+WEATHER_KEY+"&units=imperial"); return await r.json(); } catch(e) { return null; }
+  try {
+    const { data, error } = await supabase.functions.invoke("weather", { body: { lat, lon } });
+    if (error) return null;
+    return data;
+  } catch(e) { return null; }
 }
 async function fetchLiveAqi(lat, lon) {
-  try { const r = await fetch("https://www.airnowapi.org/aq/observation/latLong/current/?format=application/json&latitude="+lat+"&longitude="+lon+"&distance=25&API_KEY="+AIRNOW_KEY); return await r.json(); } catch(e) { return []; }
+  try {
+    const { data, error } = await supabase.functions.invoke("aqi", { body: { lat, lon } });
+    if (error) return [];
+    return Array.isArray(data) ? data : [];
+  } catch(e) { return []; }
+}
+
+async function fetchCachedWeather(locationId) {
+  if (!locationId) return null;
+  try {
+    const { data } = await supabase.from("weather_readings").select("*").eq("location_id",locationId).order("recorded_at",{ascending:false}).limit(1);
+    if (!data || data.length === 0) return null;
+    const r = data[0];
+    return {
+      main: { temp: r.temperature_f, feels_like: r.feels_like_f, humidity: r.humidity_pct, pressure: r.pressure_hpa },
+      wind: { speed: r.wind_speed_mph, deg: r.wind_direction_deg },
+      clouds: { all: r.cloud_cover_pct },
+      visibility: r.visibility_m,
+      weather: [{ description: r.conditions }],
+      _cached: true,
+      _cachedAt: r.recorded_at,
+    };
+  } catch(e) { return null; }
+}
+
+async function fetchCachedAqi(locationId) {
+  if (!locationId) return [];
+  try {
+    const { data } = await supabase.from("aqi_readings").select("*").eq("location_id",locationId).order("recorded_at",{ascending:false}).limit(1);
+    if (!data || data.length === 0) return [];
+    const r = data[0];
+    return [{
+      AQI: r.aqi,
+      Category: { Name: r.category },
+      ParameterName: r.pollutant,
+      ReportingArea: r.site_name,
+      _cached: true,
+      _cachedAt: r.recorded_at,
+    }];
+  } catch(e) { return []; }
+}
+
+async function fetchWeatherWithFallback(lat, lon, locationId) {
+  const live = await fetchLiveWeather(lat, lon);
+  if (live && live.main && live.main.temp !== undefined) return live;
+  const cached = await fetchCachedWeather(locationId);
+  return cached;
+}
+
+async function fetchAqiWithFallback(lat, lon, locationId) {
+  const live = await fetchLiveAqi(lat, lon);
+  if (live && live.length > 0 && live[0].AQI !== undefined) return live;
+  const cached = await fetchCachedAqi(locationId);
+  return cached;
 }
 async function fetchLiveSpecies(lat, lon) {
   try {
@@ -157,12 +211,35 @@ async function fetchSpeciesDetail(taxonId) {
   } catch(e) { return null; }
 }
 
-function MetricCard({label,value,unit,status,good,source,sparklineData,sparklineKey,sparklineColor}) {
+function DataSourceBadge({ cached, cachedAt }) {
+  if (!cached) return (
+    <div className="inline-flex items-center gap-1 text-[9px] font-medium text-emerald-600">
+      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
+      Live
+    </div>
+  );
+  const ago = cachedAt ? Math.floor((Date.now() - new Date(cachedAt).getTime()) / (60*60*1000)) : 0;
+  const agoText = ago < 1 ? "< 1h ago" : ago < 24 ? ago+"h ago" : Math.floor(ago/24)+"d ago";
+  return (
+    <div className="inline-flex items-center gap-1 text-[9px] font-medium text-amber-600" title="Live API unavailable. Showing most recent cached data.">
+      <div className="w-1.5 h-1.5 rounded-full bg-amber-500"></div>
+      Cached · {agoText}
+    </div>
+  );
+}
+
+function MetricCard({label,value,unit,status,good,source,sparklineData,sparklineKey,sparklineColor,cached,cachedAt}) {
   return (<div className="bg-white border border-emerald-100 rounded-xl p-4 hover:shadow-sm transition-shadow">
-    <div className="text-xs text-gray-400 uppercase tracking-wide mb-2">{label}</div>
+    <div className="flex justify-between items-start mb-2">
+      <div className="text-xs text-gray-400 uppercase tracking-wide">{label}</div>
+      {cached !== undefined && <DataSourceBadge cached={cached} cachedAt={cachedAt}/>}
+    </div>
     <div className="text-2xl font-bold text-gray-900">{value}{unit && <span className="text-sm font-normal text-gray-400 ml-1">{unit}</span>}</div>
     <div className={"text-xs mt-1.5 "+(good ? "text-emerald-600" : "text-amber-600")}>{status}</div>
-    {sparklineData && sparklineKey && <div className="mt-2 -mx-1"><Sparkline data={sparklineData} dataKey={sparklineKey} color={sparklineColor || "#0F6E56"} height={28}/></div>}
+    {sparklineData && sparklineKey && <div className="mt-2 -mx-1">
+      <Sparkline data={sparklineData} dataKey={sparklineKey} color={sparklineColor || "#0F6E56"} height={28}/>
+      <div className="text-[9px] text-gray-300 text-center mt-0.5">7-day daily avg</div>
+    </div>}
     {source && <div className="text-[10px] text-gray-300 mt-2 pt-2 border-t border-gray-50">Source: {source}</div>}</div>);
 }
 function AlertBanner({type,title,description}) {
@@ -330,9 +407,21 @@ const taxaColors = {Aves:"#3b82f6",Plantae:"#0F6E56",Insecta:"#EF9F27",Mammalia:
 
 function Sparkline({ data, dataKey, color, height }) {
   if (!data || data.length < 2) return null;
-  const chartData = data.map(function(d) {
+  const rawData = data.map(function(d) {
     return { t: new Date(d.recorded_at).getTime(), value: d[dataKey] };
   }).filter(function(d){ return d.value !== null && d.value !== undefined; });
+  if (rawData.length < 2) return null;
+  const byDay = {};
+  rawData.forEach(function(d) {
+    const day = new Date(d.t).toISOString().slice(0,10);
+    if (!byDay[day]) byDay[day] = [];
+    byDay[day].push(d.value);
+  });
+  const chartData = Object.keys(byDay).sort().map(function(day) {
+    const vals = byDay[day];
+    const avg = vals.reduce(function(a,b){return a+b;},0) / vals.length;
+    return { day: day, value: avg };
+  });
   if (chartData.length < 2) return null;
   return (
     <ResponsiveContainer width="100%" height={height || 32}>
@@ -461,8 +550,8 @@ function App() {
     async function load() {
       setDataLoading(true);
       const [w,a,s,wq,pl,inv] = await Promise.all([
-        fetchLiveWeather(loc.latitude,loc.longitude),
-        fetchLiveAqi(loc.latitude,loc.longitude),
+        fetchWeatherWithFallback(loc.latitude,loc.longitude,loc.id),
+        fetchAqiWithFallback(loc.latitude,loc.longitude,loc.id),
         fetchLiveSpecies(loc.latitude,loc.longitude),
         fetchLiveWater(loc.latitude,loc.longitude),
         fetchLivePlants(loc.latitude,loc.longitude),
@@ -533,6 +622,11 @@ function App() {
   const waterSite = water && water.site_name ? water.site_name : "No station nearby";
   const plantCount = plants ? plants.total.toLocaleString() : "--";
   const invasiveCount = invasives ? invasives.total : 0;
+  const weatherCached = weather && weather._cached;
+  const weatherCachedAt = weather && weather._cachedAt;
+  const aqiCached = aqi && aqi.length > 0 && aqi[0]._cached;
+  const aqiCachedAt = aqi && aqi.length > 0 && aqi[0]._cachedAt;
+
 
   const alerts = [];
   if (aqiVal !== "--" && aqiVal > 100) alerts.push({type:"critical",title:"AQI "+aqiVal,description:"Unhealthy air quality detected."});
@@ -895,10 +989,10 @@ function App() {
       case "Air & climate": return (<>
         <PageHeader title="Air & climate" subtitle={loc.name}/>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-          <MetricCard label="Temperature" value={temp} unit="F" status={conditions} good={temp==="--"||temp<95} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="temperature_f" sparklineColor="#D85A30"/>
-          <MetricCard label="Humidity" value={humidity} unit="%" status="Relative" good={humidity==="--"||humidity<70} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="humidity_pct" sparklineColor="#06b6d4"/>
-          <MetricCard label="Wind" value={wind} unit="mph" status={weather&&weather.wind?weather.wind.deg+" deg":"--"} good source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="wind_speed_mph" sparklineColor="#EF9F27"/>
-          <MetricCard label="AQI" value={aqiVal} status={aqiCat} good={aqiVal==="--"||aqiVal<=50} source="EPA AirNow" sparklineData={trendAqi} sparklineKey="aqi" sparklineColor="#8b5cf6"/>
+          <MetricCard label="Temperature" value={temp} unit="F" status={conditions} good={temp==="--"||temp<95} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="temperature_f" sparklineColor="#D85A30" cached={weatherCached} cachedAt={weatherCachedAt}/>
+          <MetricCard label="Humidity" value={humidity} unit="%" status="Relative" good={humidity==="--"||humidity<70} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="humidity_pct" sparklineColor="#06b6d4" cached={weatherCached} cachedAt={weatherCachedAt}/>
+          <MetricCard label="Wind" value={wind} unit="mph" status={weather&&weather.wind?weather.wind.deg+" deg":"--"} good source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="wind_speed_mph" sparklineColor="#EF9F27" cached={weatherCached} cachedAt={weatherCachedAt}/>
+          <MetricCard label="AQI" value={aqiVal} status={aqiCat} good={aqiVal==="--"||aqiVal<=50} source="EPA AirNow" sparklineData={trendAqi} sparklineKey="aqi" sparklineColor="#8b5cf6" cached={aqiCached} cachedAt={aqiCachedAt}/>
         </div>
         {weather && weather.main && <SectionCard title="Current conditions" source="OpenWeatherMap - updated in real-time">
           <div className="text-sm text-gray-600">{"Feels like "+feelsLike+" F with "+(weather.clouds?weather.clouds.all:0)+"% cloud cover and "+(weather.visibility?Math.round(weather.visibility/1000):0)+"km visibility. Pressure at "+weather.main.pressure+" hPa."}</div></SectionCard>}
@@ -1035,10 +1129,10 @@ function App() {
         {alerts.length > 0 && <div className="flex flex-col gap-2 mb-5">{alerts.map(function(a,i){return <AlertBanner key={i} type={a.type} title={a.title} description={a.description}/>;})}</div>}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
           <MetricCard label="Water flow" value={flow} unit="cfs" status={waterSite} good={flow==="--"||flow<500} source="USGS" sparklineData={trendWater} sparklineKey="streamflow_cfs" sparklineColor="#0284c7"/>
-          <MetricCard label="AQI" value={aqiVal} status={aqiCat} good={aqiVal==="--"||aqiVal<=50} source="EPA AirNow" sparklineData={trendAqi} sparklineKey="aqi" sparklineColor="#8b5cf6"/>
+          <MetricCard label="AQI" value={aqiVal} status={aqiCat} good={aqiVal==="--"||aqiVal<=50} source="EPA AirNow" sparklineData={trendAqi} sparklineKey="aqi" sparklineColor="#8b5cf6" cached={aqiCached} cachedAt={aqiCachedAt}/>
           <MetricCard label="Species" value={speciesCount} status="Within 5km" good source="iNaturalist" sparklineData={trendSpecies} sparklineKey="species_count" sparklineColor="#0F6E56"/>
-          <MetricCard label="Humidity" value={humidity} unit="%" status={conditions} good={humidity==="--"||humidity<70} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="humidity_pct" sparklineColor="#06b6d4"/>
-          <MetricCard label="Temperature" value={temp} unit="F" status={"Wind: "+wind+" mph"} good={temp==="--"||temp<95} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="temperature_f" sparklineColor="#D85A30"/>
+          <MetricCard label="Humidity" value={humidity} unit="%" status={conditions} good={humidity==="--"||humidity<70} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="humidity_pct" sparklineColor="#06b6d4" cached={weatherCached} cachedAt={weatherCachedAt}/>
+          <MetricCard label="Temperature" value={temp} unit="F" status={"Wind: "+wind+" mph"} good={temp==="--"||temp<95} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="temperature_f" sparklineColor="#D85A30" cached={weatherCached} cachedAt={weatherCachedAt}/>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
           {species && Object.keys(species.taxa).length > 0 && <SectionCard title="Species by group" badge={speciesCount+" total"} source="iNaturalist"><div className="flex flex-wrap gap-2">{Object.entries(species.taxa).sort(function(a,b){return b[1]-a[1];}).map(function(e){return <div key={e[0]} className="flex items-center gap-2 bg-emerald-50 rounded-full px-3 py-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{background:taxaColors[e[0]]||"#6b7280"}}></div><span className="text-xs font-medium text-gray-700">{e[0]}</span><span className="text-xs text-emerald-600 font-bold">{e[1]}</span></div>;})}</div>
