@@ -157,11 +157,12 @@ async function fetchSpeciesDetail(taxonId) {
   } catch(e) { return null; }
 }
 
-function MetricCard({label,value,unit,status,good,source}) {
+function MetricCard({label,value,unit,status,good,source,sparklineData,sparklineKey,sparklineColor}) {
   return (<div className="bg-white border border-emerald-100 rounded-xl p-4 hover:shadow-sm transition-shadow">
     <div className="text-xs text-gray-400 uppercase tracking-wide mb-2">{label}</div>
     <div className="text-2xl font-bold text-gray-900">{value}{unit && <span className="text-sm font-normal text-gray-400 ml-1">{unit}</span>}</div>
     <div className={"text-xs mt-1.5 "+(good ? "text-emerald-600" : "text-amber-600")}>{status}</div>
+    {sparklineData && sparklineKey && <div className="mt-2 -mx-1"><Sparkline data={sparklineData} dataKey={sparklineKey} color={sparklineColor || "#0F6E56"} height={28}/></div>}
     {source && <div className="text-[10px] text-gray-300 mt-2 pt-2 border-t border-gray-50">Source: {source}</div>}</div>);
 }
 function AlertBanner({type,title,description}) {
@@ -326,6 +327,21 @@ function AuthScreen({onAuth}) {
 const sidebarPages = ["Overview","Water quality","Wildlife","Vegetation","Air & climate","Intelligence engine","Trends"];
 const bottomPages = ["Map","Reports","Settings"];
 const taxaColors = {Aves:"#3b82f6",Plantae:"#0F6E56",Insecta:"#EF9F27",Mammalia:"#D85A30",Reptilia:"#8b5cf6",Amphibia:"#06b6d4",Fungi:"#ec4899",Arachnida:"#f97316",Mollusca:"#14b8a6",Actinopterygii:"#0284c7"};
+
+function Sparkline({ data, dataKey, color, height }) {
+  if (!data || data.length < 2) return null;
+  const chartData = data.map(function(d) {
+    return { t: new Date(d.recorded_at).getTime(), value: d[dataKey] };
+  }).filter(function(d){ return d.value !== null && d.value !== undefined; });
+  if (chartData.length < 2) return null;
+  return (
+    <ResponsiveContainer width="100%" height={height || 32}>
+      <LineChart data={chartData} margin={{top:2,right:0,left:0,bottom:2}}>
+        <Line type="monotone" dataKey="value" stroke={color} strokeWidth={1.5} dot={false} isAnimationActive={false}/>
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
 
 function TrendChart({ data, dataKey, color, label, unit, loading, daysAvailable, selectedDays }) {
   if (loading) return <div className="border border-emerald-100 rounded-xl p-6 bg-white h-72 flex items-center justify-center"><div className="w-6 h-6 border-2 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"></div></div>;
@@ -823,8 +839,8 @@ function App() {
       case "Water quality": return (<>
         <PageHeader title="Water quality" subtitle={loc.name}/>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
-          <MetricCard label="Streamflow" value={flow} unit="cfs" status={waterSite} good={flow==="--"||flow<500} source="USGS Water Services"/>
-          <MetricCard label="Gage height" value={water&&water.gage?Math.round(water.gage*10)/10:"--"} unit="ft" status="Water level" good source="USGS Water Services"/>
+          <MetricCard label="Streamflow" value={flow} unit="cfs" status={waterSite} good={flow==="--"||flow<500} source="USGS Water Services" sparklineData={trendWater} sparklineKey="streamflow_cfs" sparklineColor="#0284c7"/>
+          <MetricCard label="Gage height" value={water&&water.gage?Math.round(water.gage*10)/10:"--"} unit="ft" status="Water level" good source="USGS Water Services" sparklineData={trendWater} sparklineKey="gage_height_ft" sparklineColor="#0284c7"/>
           <MetricCard label="Precipitation" value={water&&water.precip!==null?water.precip:"--"} unit="in" status="Recent" good source="USGS Water Services"/>
         </div>
         {water && water.site_name && <SectionCard title="Monitoring station" source="USGS Water Services - live readings from nearest active station"><div className="text-sm text-gray-600 mb-3">{water.site_name}</div>
@@ -839,7 +855,7 @@ function App() {
       case "Wildlife": return (<>
         <PageHeader title="Wildlife & biodiversity" subtitle={loc.name}/>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
-          <MetricCard label="Total species" value={speciesCount} status="Within 5km radius" good source="iNaturalist"/>
+          <MetricCard label="Total species" value={speciesCount} status="Within 5km radius" good source="iNaturalist" sparklineData={trendSpecies} sparklineKey="species_count" sparklineColor="#0F6E56"/>
           <MetricCard label="Taxa groups" value={species?Object.keys(species.taxa).length:"--"} status="Categories observed" good source="iNaturalist"/>
         </div>
         {species && Object.keys(species.taxa).length > 0 && <div className="mb-5"><SectionCard title="Species by group" badge={speciesCount+" total"}>
@@ -879,10 +895,10 @@ function App() {
       case "Air & climate": return (<>
         <PageHeader title="Air & climate" subtitle={loc.name}/>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-          <MetricCard label="Temperature" value={temp} unit="F" status={conditions} good={temp==="--"||temp<95} source="OpenWeatherMap"/>
-          <MetricCard label="Humidity" value={humidity} unit="%" status="Relative" good={humidity==="--"||humidity<70} source="OpenWeatherMap"/>
-          <MetricCard label="Wind" value={wind} unit="mph" status={weather&&weather.wind?weather.wind.deg+" deg":"--"} good source="OpenWeatherMap"/>
-          <MetricCard label="AQI" value={aqiVal} status={aqiCat} good={aqiVal==="--"||aqiVal<=50} source="EPA AirNow"/>
+          <MetricCard label="Temperature" value={temp} unit="F" status={conditions} good={temp==="--"||temp<95} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="temperature_f" sparklineColor="#D85A30"/>
+          <MetricCard label="Humidity" value={humidity} unit="%" status="Relative" good={humidity==="--"||humidity<70} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="humidity_pct" sparklineColor="#06b6d4"/>
+          <MetricCard label="Wind" value={wind} unit="mph" status={weather&&weather.wind?weather.wind.deg+" deg":"--"} good source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="wind_speed_mph" sparklineColor="#EF9F27"/>
+          <MetricCard label="AQI" value={aqiVal} status={aqiCat} good={aqiVal==="--"||aqiVal<=50} source="EPA AirNow" sparklineData={trendAqi} sparklineKey="aqi" sparklineColor="#8b5cf6"/>
         </div>
         {weather && weather.main && <SectionCard title="Current conditions" source="OpenWeatherMap - updated in real-time">
           <div className="text-sm text-gray-600">{"Feels like "+feelsLike+" F with "+(weather.clouds?weather.clouds.all:0)+"% cloud cover and "+(weather.visibility?Math.round(weather.visibility/1000):0)+"km visibility. Pressure at "+weather.main.pressure+" hPa."}</div></SectionCard>}
@@ -1018,11 +1034,11 @@ function App() {
         </div>
         {alerts.length > 0 && <div className="flex flex-col gap-2 mb-5">{alerts.map(function(a,i){return <AlertBanner key={i} type={a.type} title={a.title} description={a.description}/>;})}</div>}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-          <MetricCard label="Water flow" value={flow} unit="cfs" status={waterSite} good={flow==="--"||flow<500} source="USGS"/>
-          <MetricCard label="AQI" value={aqiVal} status={aqiCat} good={aqiVal==="--"||aqiVal<=50} source="EPA AirNow"/>
-          <MetricCard label="Species" value={speciesCount} status="Within 5km" good source="iNaturalist"/>
-          <MetricCard label="Humidity" value={humidity} unit="%" status={conditions} good={humidity==="--"||humidity<70} source="OpenWeatherMap"/>
-          <MetricCard label="Temperature" value={temp} unit="F" status={"Wind: "+wind+" mph"} good={temp==="--"||temp<95} source="OpenWeatherMap"/>
+          <MetricCard label="Water flow" value={flow} unit="cfs" status={waterSite} good={flow==="--"||flow<500} source="USGS" sparklineData={trendWater} sparklineKey="streamflow_cfs" sparklineColor="#0284c7"/>
+          <MetricCard label="AQI" value={aqiVal} status={aqiCat} good={aqiVal==="--"||aqiVal<=50} source="EPA AirNow" sparklineData={trendAqi} sparklineKey="aqi" sparklineColor="#8b5cf6"/>
+          <MetricCard label="Species" value={speciesCount} status="Within 5km" good source="iNaturalist" sparklineData={trendSpecies} sparklineKey="species_count" sparklineColor="#0F6E56"/>
+          <MetricCard label="Humidity" value={humidity} unit="%" status={conditions} good={humidity==="--"||humidity<70} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="humidity_pct" sparklineColor="#06b6d4"/>
+          <MetricCard label="Temperature" value={temp} unit="F" status={"Wind: "+wind+" mph"} good={temp==="--"||temp<95} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="temperature_f" sparklineColor="#D85A30"/>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
           {species && Object.keys(species.taxa).length > 0 && <SectionCard title="Species by group" badge={speciesCount+" total"} source="iNaturalist"><div className="flex flex-wrap gap-2">{Object.entries(species.taxa).sort(function(a,b){return b[1]-a[1];}).map(function(e){return <div key={e[0]} className="flex items-center gap-2 bg-emerald-50 rounded-full px-3 py-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{background:taxaColors[e[0]]||"#6b7280"}}></div><span className="text-xs font-medium text-gray-700">{e[0]}</span><span className="text-xs text-emerald-600 font-bold">{e[1]}</span></div>;})}</div>
