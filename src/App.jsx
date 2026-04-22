@@ -3,6 +3,7 @@ import { supabase } from "./supabase";
 import jsPDF from "jspdf";
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from "react-leaflet";
 import L from "leaflet";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart, ReferenceLine } from "recharts";
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -11,19 +12,14 @@ L.Icon.Default.mergeOptions({
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
 
+const WEATHER_KEY = "4c705b525d3a948e813bc54a52d775e8";
+const AIRNOW_KEY = "8AB5D0CF-5115-4D34-9382-92AF9AFFD337";
+
 async function fetchLiveWeather(lat, lon) {
-  try {
-    const { data, error } = await supabase.functions.invoke("weather", { body: { lat, lon } });
-    if (error) return null;
-    return data;
-  } catch(e) { return null; }
+  try { const r = await fetch("https://api.openweathermap.org/data/2.5/weather?lat="+lat+"&lon="+lon+"&appid="+WEATHER_KEY+"&units=imperial"); return await r.json(); } catch(e) { return null; }
 }
 async function fetchLiveAqi(lat, lon) {
-  try {
-    const { data, error } = await supabase.functions.invoke("aqi", { body: { lat, lon } });
-    if (error) return [];
-    return Array.isArray(data) ? data : [];
-  } catch(e) { return []; }
+  try { const r = await fetch("https://www.airnowapi.org/aq/observation/latLong/current/?format=application/json&latitude="+lat+"&longitude="+lon+"&distance=25&API_KEY="+AIRNOW_KEY); return await r.json(); } catch(e) { return []; }
 }
 async function fetchLiveSpecies(lat, lon) {
   try {
@@ -96,6 +92,48 @@ async function fetchInvasiveSpecies(lat, lon) {
     return { total: total, species: species };
   } catch(e) { return { total: 0, species: [] }; }
 }
+async function fetchHistoricalWeather(locationId, days) {
+  try {
+    const cutoff = new Date(Date.now() - days*24*60*60*1000).toISOString();
+    const {data, error} = await supabase.from("weather_readings").select("temperature_f,humidity_pct,wind_speed_mph,recorded_at").eq("location_id",locationId).gte("recorded_at",cutoff).order("recorded_at",{ascending:true});
+    if (error) return [];
+    return data || [];
+  } catch(e) { return []; }
+}
+async function fetchHistoricalAqi(locationId, days) {
+  try {
+    const cutoff = new Date(Date.now() - days*24*60*60*1000).toISOString();
+    const {data, error} = await supabase.from("aqi_readings").select("aqi,category,recorded_at").eq("location_id",locationId).gte("recorded_at",cutoff).order("recorded_at",{ascending:true});
+    if (error) return [];
+    return data || [];
+  } catch(e) { return []; }
+}
+async function fetchHistoricalSpecies(locationId, days) {
+  try {
+    const cutoff = new Date(Date.now() - days*24*60*60*1000).toISOString();
+    const {data, error} = await supabase.from("species_observations").select("species_count,recorded_at").eq("location_id",locationId).gte("recorded_at",cutoff).order("recorded_at",{ascending:true});
+    if (error) return [];
+    return data || [];
+  } catch(e) { return []; }
+}
+async function fetchHistoricalWater(locationId, days) {
+  try {
+    const cutoff = new Date(Date.now() - days*24*60*60*1000).toISOString();
+    const {data, error} = await supabase.from("water_quality").select("streamflow_cfs,gage_height_ft,recorded_at").eq("location_id",locationId).gte("recorded_at",cutoff).order("recorded_at",{ascending:true});
+    if (error) return [];
+    return data || [];
+  } catch(e) { return []; }
+}
+async function fetchDataCoverage(locationId) {
+  try {
+    const {data} = await supabase.from("weather_readings").select("recorded_at").eq("location_id",locationId).order("recorded_at",{ascending:true}).limit(1);
+    if (!data || data.length === 0) return 0;
+    const oldest = new Date(data[0].recorded_at);
+    const days = Math.floor((Date.now() - oldest.getTime()) / (24*60*60*1000));
+    return Math.max(1, days + 1);
+  } catch(e) { return 0; }
+}
+
 async function fetchSpeciesDetail(taxonId) {
   try {
     const r = await fetch("https://api.inaturalist.org/v1/taxa/"+taxonId);
@@ -285,22 +323,84 @@ function AuthScreen({onAuth}) {
   );
 }
 
-const defaultParks = [
-  { id: "d1", name: "River Legacy Parks", latitude: 32.7896, longitude: -97.0917, isDefault: true },
-  { id: "d2", name: "Bob Jones Nature Center", latitude: 32.9412, longitude: -97.1342, isDefault: true },
-  { id: "d3", name: "Colleyville Nature Center", latitude: 32.8810, longitude: -97.1500, isDefault: true },
-  { id: "d4", name: "Grapevine Lake", latitude: 32.9750, longitude: -97.0780, isDefault: true },
-  { id: "d5", name: "Lake Arlington", latitude: 32.7340, longitude: -97.1260, isDefault: true },
-];
-
-const sidebarPages = ["Overview","Water quality","Wildlife","Vegetation","Air & climate","Intelligence engine"];
+const sidebarPages = ["Overview","Water quality","Wildlife","Vegetation","Air & climate","Intelligence engine","Trends"];
 const bottomPages = ["Map","Reports","Settings"];
 const taxaColors = {Aves:"#3b82f6",Plantae:"#0F6E56",Insecta:"#EF9F27",Mammalia:"#D85A30",Reptilia:"#8b5cf6",Amphibia:"#06b6d4",Fungi:"#ec4899",Arachnida:"#f97316",Mollusca:"#14b8a6",Actinopterygii:"#0284c7"};
+
+function TrendChart({ data, dataKey, color, label, unit, loading, daysAvailable, selectedDays }) {
+  if (loading) return <div className="border border-emerald-100 rounded-xl p-6 bg-white h-72 flex items-center justify-center"><div className="w-6 h-6 border-2 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"></div></div>;
+
+  if (daysAvailable < 2) {
+    return (
+      <div className="border border-emerald-100 rounded-xl p-6 bg-white h-72 flex flex-col items-center justify-center text-center">
+        <div className="text-sm font-semibold text-gray-700 mb-2">{label}</div>
+        <div className="text-xs text-gray-400 mb-1">Not enough data yet</div>
+        <div className="text-xs text-emerald-600">Need at least 2 days of readings</div>
+        <div className="text-[10px] text-gray-300 mt-3">Currently have {daysAvailable} {daysAvailable === 1 ? "day" : "days"} of data</div>
+      </div>
+    );
+  }
+
+  if (!data || data.length === 0) return <div className="border border-emerald-100 rounded-xl p-6 bg-white h-72 flex items-center justify-center"><div className="text-sm text-gray-400">No data available for this period</div></div>;
+
+  const chartData = data.map(function(d) {
+    return { time: new Date(d.recorded_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}), value: d[dataKey] };
+  }).filter(function(d){ return d.value !== null && d.value !== undefined; });
+
+  if (chartData.length === 0) return <div className="border border-emerald-100 rounded-xl p-6 bg-white h-72 flex items-center justify-center"><div className="text-sm text-gray-400">No {label.toLowerCase()} data in this period</div></div>;
+
+  const values = chartData.map(function(d){return d.value;});
+  const avg = values.reduce(function(a,b){return a+b;},0) / values.length;
+  const min = Math.min.apply(null, values);
+  const max = Math.max.apply(null, values);
+  const latest = values[values.length - 1];
+  const earliest = values[0];
+  const change = earliest > 0 ? ((latest - earliest) / earliest) * 100 : 0;
+  const trendUp = change > 0;
+
+  return (
+    <div className="border border-emerald-100 rounded-xl p-5 bg-white">
+      <div className="flex justify-between items-start mb-4">
+        <div>
+          <div className="text-xs text-gray-400 uppercase tracking-wide">{label}</div>
+          <div className="text-2xl font-bold text-gray-900 mt-1">{Math.round(latest*10)/10}{unit && <span className="text-sm font-normal text-gray-400 ml-1">{unit}</span>}</div>
+        </div>
+        <div className="text-right">
+          <div className={"text-xs font-medium " + (trendUp ? "text-red-500" : "text-emerald-600")}>{trendUp?"▲":"▼"} {Math.abs(Math.round(change*10)/10)}%</div>
+          <div className="text-[10px] text-gray-400 mt-1">vs. {selectedDays}d ago</div>
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height={180}>
+        <AreaChart data={chartData} margin={{top:5,right:5,left:0,bottom:0}}>
+          <defs>
+            <linearGradient id={"gradient-"+dataKey} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.25}/>
+              <stop offset="100%" stopColor={color} stopOpacity={0}/>
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false}/>
+          <XAxis dataKey="time" tick={{fontSize:10, fill:"#9ca3af"}} tickLine={false} axisLine={false}/>
+          <YAxis tick={{fontSize:10, fill:"#9ca3af"}} tickLine={false} axisLine={false} width={35}/>
+          <Tooltip contentStyle={{background:"white",border:"1px solid #d1fae5",borderRadius:"8px",fontSize:"12px"}} labelStyle={{color:"#6b7280"}}/>
+          <Area type="monotone" dataKey="value" stroke={color} strokeWidth={2} fill={"url(#gradient-"+dataKey+")"}/>
+          <ReferenceLine y={avg} stroke="#d1d5db" strokeDasharray="3 3" label={{value:"avg",position:"right",fill:"#9ca3af",fontSize:9}}/>
+        </AreaChart>
+      </ResponsiveContainer>
+      <div className="flex justify-between mt-3 pt-3 border-t border-gray-50 text-[10px] text-gray-400">
+        <div><span className="font-semibold text-gray-600">Min:</span> {Math.round(min*10)/10}{unit||""}</div>
+        <div><span className="font-semibold text-gray-600">Avg:</span> {Math.round(avg*10)/10}{unit||""}</div>
+        <div><span className="font-semibold text-gray-600">Max:</span> {Math.round(max*10)/10}{unit||""}</div>
+        <div><span className="font-semibold text-gray-600">Readings:</span> {chartData.length}</div>
+      </div>
+      {daysAvailable < selectedDays && <div className="text-[10px] text-amber-600 mt-2 text-center">Showing {daysAvailable} {daysAvailable===1?"day":"days"} of available data (less than {selectedDays}-day window)</div>}
+    </div>
+  );
+}
 
 function App() {
   const [user,setUser] = useState(null);
   const [authLoading,setAuthLoading] = useState(true);
-  const [allLocations,setAllLocations] = useState(defaultParks);
+  const [allLocations,setAllLocations] = useState([]);
   const [selectedIdx,setSelectedIdx] = useState(0);
   const [activePage,setActivePage] = useState("Overview");
   const [weather,setWeather] = useState(null);
@@ -318,6 +418,13 @@ function App() {
   const [detailLoading,setDetailLoading] = useState(false);
   const [viewAllModal,setViewAllModal] = useState(null);
   const [lastUpdated,setLastUpdated] = useState(null);
+  const [trendDays,setTrendDays] = useState(7);
+  const [trendWeather,setTrendWeather] = useState([]);
+  const [trendAqi,setTrendAqi] = useState([]);
+  const [trendSpecies,setTrendSpecies] = useState([]);
+  const [trendWater,setTrendWater] = useState([]);
+  const [trendLoading,setTrendLoading] = useState(false);
+  const [daysAvailable,setDaysAvailable] = useState(0);
 
   useEffect(function() {
     supabase.auth.getSession().then(function(r){if(r.data.session)setUser(r.data.session.user);setAuthLoading(false);});
@@ -328,8 +435,8 @@ function App() {
   useEffect(function(){if(user)loadUserLocations();},[user]);
 
   async function loadUserLocations() {
-    const {data} = await supabase.from("user_locations").select("*").order("created_at",{ascending:true});
-    setAllLocations([...defaultParks,...(data||[])]);
+    const {data} = await supabase.from("user_locations").select("*").order("is_default",{ascending:false}).order("created_at",{ascending:true});
+    setAllLocations(data||[]);
   }
 
   const loc = allLocations[selectedIdx] || allLocations[0];
@@ -351,6 +458,25 @@ function App() {
     }
     load();
   },[selectedIdx,allLocations]);
+
+  useEffect(function() {
+    async function loadTrends() {
+      const loc = allLocations[selectedIdx];
+      if (!loc || !loc.id || (activePage !== "Trends" && activePage !== "Water quality" && activePage !== "Wildlife" && activePage !== "Air & climate" && activePage !== "Overview")) return;
+      setTrendLoading(true);
+      const [tw,ta,ts,twq,cov] = await Promise.all([
+        fetchHistoricalWeather(loc.id, trendDays),
+        fetchHistoricalAqi(loc.id, trendDays),
+        fetchHistoricalSpecies(loc.id, trendDays),
+        fetchHistoricalWater(loc.id, trendDays),
+        fetchDataCoverage(loc.id),
+      ]);
+      setTrendWeather(tw); setTrendAqi(ta); setTrendSpecies(ts); setTrendWater(twq);
+      setDaysAvailable(cov);
+      setTrendLoading(false);
+    }
+    loadTrends();
+  },[selectedIdx,allLocations,trendDays,activePage]);
 
   async function openSpeciesDetail(item) {
     const taxonId = item.id || item;
@@ -775,6 +901,28 @@ function App() {
           <InsightCard factor1="Water flow" factor2="Wildlife" color1="bg-cyan-50 text-cyan-800" color2="bg-emerald-50 text-emerald-800" confidence={68} text="Streamflow above 300 cfs correlates with 25% more amphibian sightings within 2 weeks."/>
           <InsightCard factor1="Humidity" factor2="Species" color1="bg-blue-50 text-blue-800" color2="bg-purple-50 text-purple-800" confidence={64} text="Sustained humidity above 75% for 5+ days correlates with increased fungal species and decreased pollinator activity."/>
         </div>
+      </>);
+
+      case "Trends": return (<>
+        <PageHeader title="Historical trends" subtitle={loc.name + " · " + daysAvailable + " days of data available"}/>
+        <div className="bg-emerald-50/50 border border-emerald-100 rounded-xl px-4 py-2.5 mb-5 flex items-center gap-2">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="flex-shrink-0"><circle cx="12" cy="12" r="10" stroke="#0F6E56" strokeWidth="2"/><path d="M12 16V12M12 8H12.01" stroke="#0F6E56" strokeWidth="2" strokeLinecap="round"/></svg>
+          <div className="text-xs text-emerald-700">Trends show actual recorded data from your daily collection script. Charts with insufficient data will show when they become available.</div>
+        </div>
+        <div className="flex gap-2 mb-5">
+          {[7,30,90].map(function(d){ return (
+            <button key={d} onClick={function(){setTrendDays(d);}} className={"text-sm px-4 py-2 rounded-xl font-medium transition-colors " + (trendDays===d ? "bg-emerald-600 text-white" : "bg-white border border-emerald-200 text-gray-600 hover:bg-emerald-50")}>{d} days</button>
+          );})}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <TrendChart data={trendWeather} dataKey="temperature_f" color="#D85A30" label="Temperature" unit="°F" loading={trendLoading} daysAvailable={daysAvailable} selectedDays={trendDays}/>
+          <TrendChart data={trendAqi} dataKey="aqi" color="#8b5cf6" label="Air Quality Index" unit="" loading={trendLoading} daysAvailable={daysAvailable} selectedDays={trendDays}/>
+          <TrendChart data={trendWater} dataKey="streamflow_cfs" color="#0284c7" label="Streamflow" unit=" cfs" loading={trendLoading} daysAvailable={daysAvailable} selectedDays={trendDays}/>
+          <TrendChart data={trendSpecies} dataKey="species_count" color="#0F6E56" label="Species Observed" unit="" loading={trendLoading} daysAvailable={daysAvailable} selectedDays={trendDays}/>
+          <TrendChart data={trendWeather} dataKey="humidity_pct" color="#06b6d4" label="Humidity" unit="%" loading={trendLoading} daysAvailable={daysAvailable} selectedDays={trendDays}/>
+          <TrendChart data={trendWeather} dataKey="wind_speed_mph" color="#EF9F27" label="Wind Speed" unit=" mph" loading={trendLoading} daysAvailable={daysAvailable} selectedDays={trendDays}/>
+        </div>
+        <div className="text-[10px] text-gray-300 mt-4 text-center">Data sourced from OpenWeatherMap, EPA AirNow, iNaturalist, and USGS Water Services. Collected daily via automated script.</div>
       </>);
 
       case "Map": return (<>
