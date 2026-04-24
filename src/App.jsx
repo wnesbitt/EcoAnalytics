@@ -402,7 +402,10 @@ function AuthScreen({onAuth}) {
 }
 
 const sidebarPages = ["Overview","Water quality","Wildlife","Vegetation","Air & climate","Intelligence engine","Trends"];
-const bottomPages = ["Map","Reports","Data integrity","Settings"];
+const bottomPages = ["Map","Reports","Data integrity","Plans","Settings"];
+const GROVE_PRICE_ID = "price_1TPmOtFHlEDRqk3QPiDibvbK";
+const FOREST_PRICE_ID = "price_1TPm9BFHlEDRqk3QVjxsPBlO";
+const STRIPE_PUBLISHABLE_KEY = "pk_test_51TPkigFHlEDRqk3QfJrVyfc7hBXosBgT8EadtpVyD2vuwILpzokLGHHCEONjCjsLY6sqngVzBMuBpEMtjGfxMZJ500JgICD1Ep";
 const taxaColors = {Aves:"#3b82f6",Plantae:"#0F6E56",Insecta:"#EF9F27",Mammalia:"#D85A30",Reptilia:"#8b5cf6",Amphibia:"#06b6d4",Fungi:"#ec4899",Arachnida:"#f97316",Mollusca:"#14b8a6",Actinopterygii:"#0284c7"};
 
 function Sparkline({ data, dataKey, color, height }) {
@@ -534,6 +537,8 @@ function App() {
   const [alertForm,setAlertForm] = useState({email:"",alerts_enabled:false,aqi_threshold:100,temp_threshold_f:95,flow_high_threshold:1500,flow_low_threshold:10,weekly_digest:true});
   const [alertSaving,setAlertSaving] = useState(false);
   const [alertSaveMsg,setAlertSaveMsg] = useState("");
+  const [subscription,setSubscription] = useState(null);
+  const [checkoutLoading,setCheckoutLoading] = useState("");
 
   useEffect(function() {
     supabase.auth.getSession().then(function(r){if(r.data.session)setUser(r.data.session.user);setAuthLoading(false);});
@@ -541,7 +546,7 @@ function App() {
     return function(){listener.subscription.unsubscribe();};
   },[]);
 
-  useEffect(function(){if(user){loadUserLocations();loadAlertPrefs();}},[user]);
+  useEffect(function(){if(user){loadUserLocations();loadAlertPrefs();loadSubscription();}},[user]);
 
   async function loadUserLocations() {
     const {data} = await supabase.from("user_locations").select("*").order("is_default",{ascending:false}).order("created_at",{ascending:true});
@@ -595,6 +600,28 @@ function App() {
     }
     setAlertSaving(false);
     setTimeout(function(){setAlertSaveMsg("");}, 3000);
+  }
+
+  async function loadSubscription() {
+    const {data} = await supabase.from("subscriptions").select("*").limit(1);
+    if (data && data.length > 0) setSubscription(data[0]);
+  }
+
+  async function startCheckout(priceId, tierName) {
+    setCheckoutLoading(tierName);
+    try {
+      const {data, error} = await supabase.functions.invoke("create-checkout", {
+        body: {priceId, userId: user.id, userEmail: user.email},
+      });
+      if (error || !data?.url) {
+        alert("Could not start checkout. Please try again.");
+      } else {
+        window.location.href = data.url;
+      }
+    } catch(e) {
+      alert("Could not start checkout. Please try again.");
+    }
+    setCheckoutLoading("");
   }
 
   const loc = allLocations[selectedIdx] || allLocations[0];
@@ -1346,6 +1373,80 @@ function App() {
 
         <div className="border border-emerald-100 rounded-2xl bg-emerald-50/40 px-5 py-4 text-xs text-gray-500 leading-relaxed">
           EcoAnalytics v1.0 (Pilot) — Data integrity page last reviewed April 2026. Questions about methodology: <span className="text-emerald-600 font-medium">will@ecoanalytics.com</span>
+        </div>
+      </>);
+
+      case "Plans": return (<>
+        <PageHeader title="Plans & pricing" subtitle="Choose the right plan for your organization"/>
+
+        {subscription && subscription.status === "active" && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-5 py-4 mb-6 flex items-center gap-3">
+            <div className="w-8 h-8 bg-emerald-600 rounded-full flex items-center justify-center flex-shrink-0">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17L4 12" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-emerald-800">You're on the {subscription.tier === "forest" ? "Forest" : "Grove"} plan</div>
+              <div className="text-xs text-emerald-600 mt-0.5">{subscription.tier === "forest" ? "Unlimited locations" : "Up to 3 locations"} · Active subscription</div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
+
+          <div className={"border-2 rounded-2xl p-6 bg-white flex flex-col " + (subscription?.tier === "grove" ? "border-emerald-500" : "border-emerald-100")}>
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <div className="text-xs font-bold text-emerald-700 uppercase tracking-wide mb-1">Grove</div>
+                <div className="text-3xl font-bold text-gray-900">$29.99<span className="text-sm font-normal text-gray-400">/mo</span></div>
+              </div>
+              {subscription?.tier === "grove" && <span className="text-xs bg-emerald-600 text-white px-2.5 py-1 rounded-full font-medium">Current plan</span>}
+            </div>
+            <div className="text-sm text-gray-500 mb-5">Perfect for a single park or nature center monitoring a small area.</div>
+            <div className="space-y-2.5 mb-6 flex-1">
+              <div className="flex items-center gap-2.5 text-sm text-gray-700"><span className="text-emerald-500 font-bold">✓</span> Up to 3 monitored locations</div>
+              <div className="flex items-center gap-2.5 text-sm text-gray-700"><span className="text-emerald-500 font-bold">✓</span> All data sources (EPA, USGS, iNaturalist, weather)</div>
+              <div className="flex items-center gap-2.5 text-sm text-gray-700"><span className="text-emerald-500 font-bold">✓</span> Historical trends & PDF reports</div>
+              <div className="flex items-center gap-2.5 text-sm text-gray-700"><span className="text-emerald-500 font-bold">✓</span> Email alerts & weekly digest</div>
+              <div className="flex items-center gap-2.5 text-sm text-gray-400"><span className="text-gray-300 font-bold">✗</span> More than 3 locations</div>
+            </div>
+            {subscription?.tier === "grove" ? (
+              <div className="text-sm text-center text-emerald-600 font-medium py-2.5">Active plan</div>
+            ) : (
+              <button onClick={function(){startCheckout(GROVE_PRICE_ID,"grove");}} disabled={checkoutLoading==="grove"} className="w-full py-3 rounded-xl bg-emerald-600 text-white font-semibold text-sm hover:bg-emerald-700 disabled:bg-gray-300 transition-colors">
+                {checkoutLoading==="grove" ? "Redirecting..." : "Subscribe to Grove →"}
+              </button>
+            )}
+          </div>
+
+          <div className={"border-2 rounded-2xl p-6 bg-white flex flex-col " + (subscription?.tier === "forest" ? "border-emerald-500" : "border-emerald-100")}>
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <div className="text-xs font-bold text-emerald-700 uppercase tracking-wide mb-1">Forest</div>
+                <div className="text-3xl font-bold text-gray-900">$49.99<span className="text-sm font-normal text-gray-400">/mo</span></div>
+              </div>
+              {subscription?.tier === "forest" && <span className="text-xs bg-emerald-600 text-white px-2.5 py-1 rounded-full font-medium">Current plan</span>}
+            </div>
+            <div className="text-sm text-gray-500 mb-5">For organizations managing multiple preserves or a regional portfolio.</div>
+            <div className="space-y-2.5 mb-6 flex-1">
+              <div className="flex items-center gap-2.5 text-sm text-gray-700"><span className="text-emerald-500 font-bold">✓</span> Unlimited monitored locations</div>
+              <div className="flex items-center gap-2.5 text-sm text-gray-700"><span className="text-emerald-500 font-bold">✓</span> All data sources (EPA, USGS, iNaturalist, weather)</div>
+              <div className="flex items-center gap-2.5 text-sm text-gray-700"><span className="text-emerald-500 font-bold">✓</span> Historical trends & PDF reports</div>
+              <div className="flex items-center gap-2.5 text-sm text-gray-700"><span className="text-emerald-500 font-bold">✓</span> Email alerts & weekly digest</div>
+              <div className="flex items-center gap-2.5 text-sm text-gray-700"><span className="text-emerald-500 font-bold">✓</span> Priority support</div>
+            </div>
+            {subscription?.tier === "forest" ? (
+              <div className="text-sm text-center text-emerald-600 font-medium py-2.5">Active plan</div>
+            ) : (
+              <button onClick={function(){startCheckout(FOREST_PRICE_ID,"forest");}} disabled={checkoutLoading==="forest"} className="w-full py-3 rounded-xl bg-emerald-700 text-white font-semibold text-sm hover:bg-emerald-800 disabled:bg-gray-300 transition-colors">
+                {checkoutLoading==="forest" ? "Redirecting..." : "Subscribe to Forest →"}
+              </button>
+            )}
+          </div>
+
+        </div>
+
+        <div className="border border-emerald-100 rounded-2xl bg-emerald-50/40 px-5 py-4 text-xs text-gray-500 leading-relaxed">
+          All plans include a 30-day free trial. Cancel anytime from your Stripe billing portal. Questions? <span className="text-emerald-600 font-medium">will@ecoanalytics.com</span>
         </div>
       </>);
 
