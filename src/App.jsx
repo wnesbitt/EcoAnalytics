@@ -402,7 +402,7 @@ function AuthScreen({onAuth}) {
 }
 
 const sidebarPages = ["Overview","Water quality","Wildlife","Vegetation","Air & climate","Intelligence engine","Trends"];
-const bottomPages = ["Map","Reports","Settings"];
+const bottomPages = ["Map","Reports","Data integrity","Settings"];
 const taxaColors = {Aves:"#3b82f6",Plantae:"#0F6E56",Insecta:"#EF9F27",Mammalia:"#D85A30",Reptilia:"#8b5cf6",Amphibia:"#06b6d4",Fungi:"#ec4899",Arachnida:"#f97316",Mollusca:"#14b8a6",Actinopterygii:"#0284c7"};
 
 function Sparkline({ data, dataKey, color, height }) {
@@ -530,6 +530,10 @@ function App() {
   const [trendWater,setTrendWater] = useState([]);
   const [trendLoading,setTrendLoading] = useState(false);
   const [daysAvailable,setDaysAvailable] = useState(0);
+  const [alertPrefs,setAlertPrefs] = useState(null);
+  const [alertForm,setAlertForm] = useState({email:"",alerts_enabled:false,aqi_threshold:100,temp_threshold_f:95,flow_high_threshold:1500,flow_low_threshold:10,weekly_digest:true});
+  const [alertSaving,setAlertSaving] = useState(false);
+  const [alertSaveMsg,setAlertSaveMsg] = useState("");
 
   useEffect(function() {
     supabase.auth.getSession().then(function(r){if(r.data.session)setUser(r.data.session.user);setAuthLoading(false);});
@@ -537,11 +541,60 @@ function App() {
     return function(){listener.subscription.unsubscribe();};
   },[]);
 
-  useEffect(function(){if(user)loadUserLocations();},[user]);
+  useEffect(function(){if(user){loadUserLocations();loadAlertPrefs();}},[user]);
 
   async function loadUserLocations() {
     const {data} = await supabase.from("user_locations").select("*").order("is_default",{ascending:false}).order("created_at",{ascending:true});
     setAllLocations(data||[]);
+  }
+
+  async function loadAlertPrefs() {
+    const {data} = await supabase.from("alert_preferences").select("*").limit(1);
+    if (data && data.length > 0) {
+      setAlertPrefs(data[0]);
+      setAlertForm({
+        email: data[0].email || "",
+        alerts_enabled: data[0].alerts_enabled || false,
+        aqi_threshold: data[0].aqi_threshold ?? 100,
+        temp_threshold_f: data[0].temp_threshold_f ?? 95,
+        flow_high_threshold: data[0].flow_high_threshold ?? 1500,
+        flow_low_threshold: data[0].flow_low_threshold ?? 10,
+        weekly_digest: data[0].weekly_digest ?? true,
+      });
+    } else {
+      // Pre-fill email from their auth account
+      setAlertForm(function(f){return {...f, email: ""};});
+    }
+  }
+
+  async function saveAlertPrefs() {
+    setAlertSaving(true);
+    setAlertSaveMsg("");
+    const row = {
+      user_id: user.id,
+      email: alertForm.email,
+      alerts_enabled: alertForm.alerts_enabled,
+      aqi_threshold: Number(alertForm.aqi_threshold),
+      temp_threshold_f: Number(alertForm.temp_threshold_f),
+      flow_high_threshold: Number(alertForm.flow_high_threshold),
+      flow_low_threshold: Number(alertForm.flow_low_threshold),
+      weekly_digest: alertForm.weekly_digest,
+      updated_at: new Date().toISOString(),
+    };
+    let error;
+    if (alertPrefs) {
+      ({error} = await supabase.from("alert_preferences").update(row).eq("user_id", user.id));
+    } else {
+      ({error} = await supabase.from("alert_preferences").insert(row));
+    }
+    if (error) {
+      setAlertSaveMsg("Error saving — " + error.message);
+    } else {
+      setAlertSaveMsg("Saved.");
+      loadAlertPrefs();
+    }
+    setAlertSaving(false);
+    setTimeout(function(){setAlertSaveMsg("");}, 3000);
   }
 
   const loc = allLocations[selectedIdx] || allLocations[0];
@@ -988,7 +1041,7 @@ function App() {
 
       case "Air & climate": return (<>
         <PageHeader title="Air & climate" subtitle={loc.name}/>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-5">
           <MetricCard label="Temperature" value={temp} unit="F" status={conditions} good={temp==="--"||temp<95} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="temperature_f" sparklineColor="#D85A30" cached={weatherCached} cachedAt={weatherCachedAt}/>
           <MetricCard label="Humidity" value={humidity} unit="%" status="Relative" good={humidity==="--"||humidity<70} source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="humidity_pct" sparklineColor="#06b6d4" cached={weatherCached} cachedAt={weatherCachedAt}/>
           <MetricCard label="Wind" value={wind} unit="mph" status={weather&&weather.wind?weather.wind.deg+" deg":"--"} good source="OpenWeatherMap" sparklineData={trendWeather} sparklineKey="wind_speed_mph" sparklineColor="#EF9F27" cached={weatherCached} cachedAt={weatherCachedAt}/>
@@ -1113,10 +1166,186 @@ function App() {
             <div className="text-sm text-gray-600 leading-relaxed">EcoAnalytics is an ecosystem intelligence platform that pulls live environmental data from federal and open-source APIs. Monitor air quality, water conditions, wildlife, and vegetation at any location in the United States.</div>
             <div className="text-xs text-gray-400 mt-3">Version 1.0 (Pilot)</div>
           </SectionCard>
+          <SectionCard title="Email alerts">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-gray-800">Enable alerts</div>
+                  <div className="text-xs text-gray-400 mt-0.5">Receive threshold alerts and weekly digests</div>
+                </div>
+                <button onClick={function(){setAlertForm(function(f){return {...f,alerts_enabled:!f.alerts_enabled};});}} className={"relative inline-flex h-6 w-11 items-center rounded-full transition-colors "+(alertForm.alerts_enabled?"bg-emerald-600":"bg-gray-200")}>
+                  <span className={"inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform "+(alertForm.alerts_enabled?"translate-x-6":"translate-x-1")}></span>
+                </button>
+              </div>
+              {alertForm.alerts_enabled && (<>
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">Alert email address</div>
+                  <input type="email" value={alertForm.email} onChange={function(e){setAlertForm(function(f){return {...f,email:e.target.value};});}} placeholder={user.email} className="text-sm px-3 py-2 rounded-xl border border-emerald-200 w-full focus:outline-none focus:border-emerald-500"/>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">AQI threshold</div>
+                    <input type="number" value={alertForm.aqi_threshold} onChange={function(e){setAlertForm(function(f){return {...f,aqi_threshold:e.target.value};});}} className="text-sm px-3 py-2 rounded-xl border border-emerald-200 w-full focus:outline-none focus:border-emerald-500"/>
+                    <div className="text-xs text-gray-400 mt-0.5">Alert when AQI exceeds this</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Temperature (°F)</div>
+                    <input type="number" value={alertForm.temp_threshold_f} onChange={function(e){setAlertForm(function(f){return {...f,temp_threshold_f:e.target.value};});}} className="text-sm px-3 py-2 rounded-xl border border-emerald-200 w-full focus:outline-none focus:border-emerald-500"/>
+                    <div className="text-xs text-gray-400 mt-0.5">Alert when temp exceeds this</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Flow high (cfs)</div>
+                    <input type="number" value={alertForm.flow_high_threshold} onChange={function(e){setAlertForm(function(f){return {...f,flow_high_threshold:e.target.value};});}} className="text-sm px-3 py-2 rounded-xl border border-emerald-200 w-full focus:outline-none focus:border-emerald-500"/>
+                    <div className="text-xs text-gray-400 mt-0.5">Alert when flow exceeds this</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Flow low (cfs)</div>
+                    <input type="number" value={alertForm.flow_low_threshold} onChange={function(e){setAlertForm(function(f){return {...f,flow_low_threshold:e.target.value};});}} className="text-sm px-3 py-2 rounded-xl border border-emerald-200 w-full focus:outline-none focus:border-emerald-500"/>
+                    <div className="text-xs text-gray-400 mt-0.5">Alert when flow drops below this</div>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-1">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-800">Weekly digest</div>
+                    <div className="text-xs text-gray-400 mt-0.5">Monday 7 AM summary of all locations</div>
+                  </div>
+                  <button onClick={function(){setAlertForm(function(f){return {...f,weekly_digest:!f.weekly_digest};});}} className={"relative inline-flex h-6 w-11 items-center rounded-full transition-colors "+(alertForm.weekly_digest?"bg-emerald-600":"bg-gray-200")}>
+                    <span className={"inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform "+(alertForm.weekly_digest?"translate-x-6":"translate-x-1")}></span>
+                  </button>
+                </div>
+              </>)}
+              <div className="flex items-center gap-3 pt-1">
+                <button onClick={saveAlertPrefs} disabled={alertSaving} className="text-sm px-5 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 font-medium disabled:bg-gray-300">{alertSaving ? "Saving..." : "Save alert settings"}</button>
+                {alertSaveMsg && <span className={"text-xs font-medium "+(alertSaveMsg.startsWith("Error")?"text-red-500":"text-emerald-600")}>{alertSaveMsg}</span>}
+              </div>
+            </div>
+          </SectionCard>
           <SectionCard title="Support">
             <div className="text-sm text-gray-600 mb-3">Questions, bugs, or feature requests? Reach out and we will respond within 24 hours.</div>
             <div className="text-sm font-medium text-emerald-600">will@ecoanalytics.com</div>
           </SectionCard>
+        </div>
+      </>);
+
+      case "Data integrity": return (<>
+        <PageHeader title="Data integrity" subtitle="Sources, methodology & limitations"/>
+        <div className="bg-emerald-700 rounded-2xl px-6 py-5 mb-6 text-white">
+          <div className="text-base font-semibold mb-1">EcoAnalytics aggregates federal scientific data — we don't produce it.</div>
+          <div className="text-sm text-emerald-100 leading-relaxed">Accuracy, precision, and timeliness depend on the source agencies listed below. We pass their data through unchanged and inherit their caveats. When an agency says a reading is provisional, so is ours.</div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
+
+          <div className="border border-emerald-100 rounded-2xl bg-white p-5 flex flex-col gap-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-emerald-700 uppercase tracking-wide mb-0.5">Air quality</div>
+                <div className="text-sm font-semibold text-gray-900">U.S. Environmental Protection Agency — AirNow Program</div>
+              </div>
+              <span className="flex-shrink-0 text-xs bg-purple-50 text-purple-700 border border-purple-100 px-2 py-0.5 rounded-full">AQI</span>
+            </div>
+            <div className="text-xs text-gray-600 leading-relaxed space-y-1.5">
+              <div><span className="font-semibold text-gray-700">What we use:</span> Air Quality Index (AQI) and primary pollutant identification. Pulled from the nearest reporting station within 25 km of your selected location.</div>
+              <div><span className="font-semibold text-gray-700">Update frequency:</span> Hourly. Readings reflect the most recent hour reported by the nearest monitor.</div>
+              <div><span className="font-semibold text-gray-700">Aggregation:</span> Single nearest-station value. No spatial averaging is applied.</div>
+            </div>
+            <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5 text-xs text-amber-800 leading-relaxed">
+              <span className="font-semibold">EPA disclaimer (verbatim):</span> "AirNow data is preliminary and may change. These data are not quality-assured and should not be used for regulatory or legal purposes."
+            </div>
+            <div className="text-xs text-gray-500 leading-relaxed"><span className="font-semibold text-gray-600">Known limitation:</span> Monitor coverage is uneven. Rural and tribal areas may have no station within range, in which case EcoAnalytics shows cached or unavailable data rather than an estimate.</div>
+            <a href="https://www.airnow.gov" target="_blank" rel="noopener noreferrer" className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 hover:underline mt-auto">Verify at source: airnow.gov →</a>
+          </div>
+
+          <div className="border border-emerald-100 rounded-2xl bg-white p-5 flex flex-col gap-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-emerald-700 uppercase tracking-wide mb-0.5">Weather</div>
+                <div className="text-sm font-semibold text-gray-900">OpenWeatherMap — Current Weather API</div>
+              </div>
+              <span className="flex-shrink-0 text-xs bg-orange-50 text-orange-700 border border-orange-100 px-2 py-0.5 rounded-full">Meteorological</span>
+            </div>
+            <div className="text-xs text-gray-600 leading-relaxed space-y-1.5">
+              <div><span className="font-semibold text-gray-700">What we use:</span> Temperature (°F), feels-like, humidity, wind speed and direction, cloud cover, visibility, and barometric pressure at the exact coordinates of your location.</div>
+              <div><span className="font-semibold text-gray-700">Update frequency:</span> Data updated every 10 minutes at source. EcoAnalytics fetches on each page load.</div>
+              <div><span className="font-semibold text-gray-700">Aggregation:</span> Point interpolation from the nearest weather model grid cell and ground station network.</div>
+            </div>
+            <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5 text-xs text-amber-800 leading-relaxed">
+              <span className="font-semibold">Provider note:</span> OpenWeatherMap blends station data with numerical weather models. Values in areas without nearby stations are model-derived and carry higher uncertainty.
+            </div>
+            <div className="text-xs text-gray-500 leading-relaxed"><span className="font-semibold text-gray-600">Known limitation:</span> Microclimates within dense forest or canyon terrain may differ from reported values. Temperature readings are at standard meteorological height (2 m), not canopy or ground level.</div>
+            <a href="https://openweathermap.org" target="_blank" rel="noopener noreferrer" className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 hover:underline mt-auto">Verify at source: openweathermap.org →</a>
+          </div>
+
+          <div className="border border-emerald-100 rounded-2xl bg-white p-5 flex flex-col gap-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-emerald-700 uppercase tracking-wide mb-0.5">Biodiversity</div>
+                <div className="text-sm font-semibold text-gray-900">iNaturalist — California Academy of Sciences & National Geographic</div>
+              </div>
+              <span className="flex-shrink-0 text-xs bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-full">Species</span>
+            </div>
+            <div className="text-xs text-gray-600 leading-relaxed space-y-1.5">
+              <div><span className="font-semibold text-gray-700">What we use:</span> Species observation counts by taxon group, individual species names and photos, and introduced/non-native species flags. Queried within a 5 km radius of your location.</div>
+              <div><span className="font-semibold text-gray-700">Update frequency:</span> iNaturalist is updated continuously as observers submit identifications. EcoAnalytics fetches on each page load.</div>
+              <div><span className="font-semibold text-gray-700">Aggregation:</span> Species counts are totals of all research-grade and needs-ID observations within the radius. No temporal filtering — reflects the full observation history at that location.</div>
+            </div>
+            <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5 text-xs text-amber-800 leading-relaxed">
+              <span className="font-semibold">Citizen science caveat:</span> iNaturalist data is contributed by volunteers, not field ecologists. Counts reflect observer effort and access, not absolute species abundance or population health.
+            </div>
+            <div className="text-xs text-gray-500 leading-relaxed"><span className="font-semibold text-gray-600">Known limitation:</span> Popular, accessible parks show more observations than remote areas of equal biodiversity. The "Introduced species" list uses iNaturalist's <span className="font-mono text-gray-600">introduced=true</span> filter — a taxon may appear here due to a single sighting. Activity level labels (High / Moderate / Low) reflect observation frequency, not ecological threat.</div>
+            <a href="https://www.inaturalist.org" target="_blank" rel="noopener noreferrer" className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 hover:underline mt-auto">Verify at source: inaturalist.org →</a>
+          </div>
+
+          <div className="border border-emerald-100 rounded-2xl bg-white p-5 flex flex-col gap-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-emerald-700 uppercase tracking-wide mb-0.5">Water</div>
+                <div className="text-sm font-semibold text-gray-900">U.S. Geological Survey — National Water Information System</div>
+              </div>
+              <span className="flex-shrink-0 text-xs bg-cyan-50 text-cyan-700 border border-cyan-100 px-2 py-0.5 rounded-full">Streamflow</span>
+            </div>
+            <div className="text-xs text-gray-600 leading-relaxed space-y-1.5">
+              <div><span className="font-semibold text-gray-700">What we use:</span> Streamflow (cubic feet per second), gage height (feet), and recent precipitation from the nearest active USGS stream gage within a 0.2° bounding box (~15 km).</div>
+              <div><span className="font-semibold text-gray-700">Update frequency:</span> USGS gages transmit every 15 minutes. EcoAnalytics fetches the most recent available reading on page load.</div>
+              <div><span className="font-semibold text-gray-700">Aggregation:</span> Single nearest-station instantaneous value. No averaging or interpolation.</div>
+            </div>
+            <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5 text-xs text-amber-800 leading-relaxed">
+              <span className="font-semibold">USGS disclaimer (verbatim):</span> "Provisional data, subject to revision. These data are preliminary and have not received Director's approval. They may be changed or deleted at any time."
+            </div>
+            <div className="text-xs text-gray-500 leading-relaxed"><span className="font-semibold text-gray-600">Known limitation:</span> USGS maintains ~8,200 active gages nationwide. Coverage is concentrated near populated areas and flood-prone watersheds. Parks without a nearby gage will show "No station nearby" — this reflects monitoring infrastructure, not actual water conditions.</div>
+            <a href="https://waterdata.usgs.gov" target="_blank" rel="noopener noreferrer" className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 hover:underline mt-auto">Verify at source: waterdata.usgs.gov →</a>
+          </div>
+
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
+          <div className="border border-emerald-100 rounded-2xl bg-white p-5">
+            <div className="text-sm font-semibold text-gray-900 mb-3">Ecosystem health score — methodology</div>
+            <div className="text-xs text-gray-600 leading-relaxed space-y-2">
+              <div>The health score shown on the Overview page is a <span className="font-semibold text-gray-700">weighted composite index</span> computed from four sub-scores:</div>
+              <div className="pl-3 space-y-1.5 border-l-2 border-emerald-100">
+                <div><span className="font-semibold text-gray-700">Air quality (30%):</span> AQI ≤ 50 = 100 pts, scales linearly to 0 at AQI 200+.</div>
+                <div><span className="font-semibold text-gray-700">Biodiversity (30%):</span> Species count relative to a 200-species reference baseline for DFW-area parks.</div>
+                <div><span className="font-semibold text-gray-700">Native species ratio (25%):</span> Ratio of native to total observed species. Lower ratio = more introduced pressure.</div>
+                <div><span className="font-semibold text-gray-700">Water monitoring (15%):</span> Binary — 100 pts if an active USGS gage is present, 50 pts if absent.</div>
+              </div>
+              <div className="text-gray-500">This score is a monitoring aid, not a scientific assessment. It is not peer-reviewed and should not substitute for formal ecological surveys or regulatory compliance reporting.</div>
+            </div>
+          </div>
+
+          <div className="border border-emerald-100 rounded-2xl bg-white p-5">
+            <div className="text-sm font-semibold text-gray-900 mb-3">General limitations</div>
+            <div className="text-xs text-gray-600 leading-relaxed space-y-2.5">
+              <div className="flex gap-2"><span className="text-emerald-600 font-bold mt-0.5">—</span><div><span className="font-semibold text-gray-700">Spatial coverage gaps:</span> Federal monitoring networks were built for regulatory and flood-safety purposes, not ecological monitoring. Coverage near nature preserves varies widely.</div></div>
+              <div className="flex gap-2"><span className="text-emerald-600 font-bold mt-0.5">—</span><div><span className="font-semibold text-gray-700">Observation bias:</span> Citizen science data is denser where humans are present. Rare or nocturnal species are systematically underrepresented.</div></div>
+              <div className="flex gap-2"><span className="text-emerald-600 font-bold mt-0.5">—</span><div><span className="font-semibold text-gray-700">No sensor ownership:</span> EcoAnalytics does not own or operate any monitoring equipment. If a source agency's sensor goes offline, data gaps appear in our interface.</div></div>
+              <div className="flex gap-2"><span className="text-emerald-600 font-bold mt-0.5">—</span><div><span className="font-semibold text-gray-700">Not for regulatory use:</span> Data displayed here is suitable for situational awareness and trend monitoring only. For permitting, compliance, or formal conservation planning, use data directly from the source agencies with their full quality metadata.</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div className="border border-emerald-100 rounded-2xl bg-emerald-50/40 px-5 py-4 text-xs text-gray-500 leading-relaxed">
+          EcoAnalytics v1.0 (Pilot) — Data integrity page last reviewed April 2026. Questions about methodology: <span className="text-emerald-600 font-medium">will@ecoanalytics.com</span>
         </div>
       </>);
 
@@ -1166,25 +1395,55 @@ function App() {
     }
   }
 
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   if (authLoading) return <div className="flex h-screen items-center justify-center"><div className="w-8 h-8 border-2 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"></div></div>;
   if (!user) return <AuthScreen onAuth={setUser}/>;
 
-  return (
-    <div className="flex h-screen bg-gray-50 text-gray-900">
-      <div className="w-56 min-w-56 bg-white border-r border-emerald-100 flex flex-col py-5">
-        <div className="px-5 pb-5 border-b border-emerald-100 mb-3"><div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center flex-shrink-0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3C12 3 5 10 5 15C5 19 8 21 12 21C16 21 19 19 19 15C19 10 12 3 12 3Z" fill="#5DCAA5"/></svg></div>
-          <div><div className="font-bold text-sm text-gray-900">EcoAnalytics</div><div className="text-xs text-emerald-600">Ecosystem intelligence</div></div></div></div>
-        <div className="px-3 mb-3"><select value={selectedIdx} onChange={function(e){setSelectedIdx(Number(e.target.value));setActivePage("Overview");}} className="text-xs px-2 py-1.5 rounded-lg border border-emerald-200 w-full bg-white focus:outline-none focus:border-emerald-500">
-          {allLocations.map(function(l,i){return <option key={l.id||i} value={i}>{l.name}</option>;})}</select></div>
-        <div className="px-3 flex-1">{sidebarPages.map(function(item){return <div key={item} onClick={function(){setActivePage(item);}} className={"px-3 py-2.5 rounded-xl text-sm mb-1 cursor-pointer transition-all "+(activePage===item?"bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200":"text-gray-500 hover:bg-gray-50")}>{item}</div>;})}</div>
-        <div className="px-3 border-t border-emerald-100 pt-3">
-          {bottomPages.map(function(item){return <div key={item} onClick={function(){setActivePage(item);}} className={"px-3 py-2.5 rounded-xl text-sm mb-1 cursor-pointer transition-all "+(activePage===item?"bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200":"text-gray-500 hover:bg-gray-50")}>{item}</div>;})}
-          <div className="text-xs text-gray-400 px-3 py-1 mt-2">{user.email}</div>
-          <div onClick={function(){supabase.auth.signOut();}} className="px-3 py-2 rounded-xl text-sm cursor-pointer text-red-500 hover:bg-red-50">Sign out</div>
-        </div>
+  function SidebarContents() {
+    return (<>
+      <div className="px-5 pb-5 border-b border-emerald-100 mb-3"><div className="flex items-center gap-2.5">
+        <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center flex-shrink-0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3C12 3 5 10 5 15C5 19 8 21 12 21C16 21 19 19 19 15C19 10 12 3 12 3Z" fill="#5DCAA5"/></svg></div>
+        <div><div className="font-bold text-sm text-gray-900">EcoAnalytics</div><div className="text-xs text-emerald-600">Ecosystem intelligence</div></div></div></div>
+      <div className="px-3 mb-3"><select value={selectedIdx} onChange={function(e){setSelectedIdx(Number(e.target.value));setActivePage("Overview");setSidebarOpen(false);}} className="text-xs px-2 py-1.5 rounded-lg border border-emerald-200 w-full bg-white focus:outline-none focus:border-emerald-500">
+        {allLocations.map(function(l,i){return <option key={l.id||i} value={i}>{l.name}</option>;})}</select></div>
+      <div className="px-3 flex-1">{sidebarPages.map(function(item){return <div key={item} onClick={function(){setActivePage(item);setSidebarOpen(false);}} className={"px-3 py-2.5 rounded-xl text-sm mb-1 cursor-pointer transition-all "+(activePage===item?"bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200":"text-gray-500 hover:bg-gray-50")}>{item}</div>;})}</div>
+      <div className="px-3 border-t border-emerald-100 pt-3">
+        {bottomPages.map(function(item){return <div key={item} onClick={function(){setActivePage(item);setSidebarOpen(false);}} className={"px-3 py-2.5 rounded-xl text-sm mb-1 cursor-pointer transition-all "+(activePage===item?"bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200":"text-gray-500 hover:bg-gray-50")}>{item}</div>;})}
+        <div className="text-xs text-gray-400 px-3 py-1 mt-2">{user.email}</div>
+        <div onClick={function(){supabase.auth.signOut();}} className="px-3 py-2 rounded-xl text-sm cursor-pointer text-red-500 hover:bg-red-50">Sign out</div>
       </div>
-      <div className="flex-1 p-6 overflow-y-auto">{renderPage()}</div>
+    </>);
+  }
+
+  return (
+    <div className="flex h-screen bg-gray-50 text-gray-900 overflow-hidden">
+
+      {/* Mobile overlay backdrop */}
+      {sidebarOpen && <div className="fixed inset-0 bg-black/40 z-20 md:hidden" onClick={function(){setSidebarOpen(false);}}/>}
+
+      {/* Sidebar — hidden on mobile unless open, always visible on desktop */}
+      <div className={"fixed inset-y-0 left-0 z-30 w-56 bg-white border-r border-emerald-100 flex flex-col py-5 transition-transform duration-200 md:static md:translate-x-0 md:z-auto " + (sidebarOpen ? "translate-x-0" : "-translate-x-full")}>
+        <SidebarContents/>
+      </div>
+
+      {/* Main content */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Mobile top bar */}
+        <div className="md:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-emerald-100 flex-shrink-0">
+          <button onClick={function(){setSidebarOpen(true);}} className="p-1.5 rounded-lg hover:bg-emerald-50">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0F6E56" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-emerald-600 rounded-md flex items-center justify-center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 3C12 3 5 10 5 15C5 19 8 21 12 21C16 21 19 19 19 15C19 10 12 3 12 3Z" fill="#5DCAA5"/></svg></div>
+            <span className="font-bold text-sm text-gray-900">EcoAnalytics</span>
+          </div>
+          <span className="ml-auto text-xs text-emerald-600 font-medium truncate max-w-[100px]">{activePage}</span>
+        </div>
+
+        <div className="flex-1 p-4 md:p-6 overflow-y-auto overflow-x-hidden min-w-0">{renderPage()}</div>
+      </div>
+
       <SpeciesDetailModal detail={speciesDetail} loading={detailLoading} onClose={function(){setSpeciesDetail(null);setDetailLoading(false);}}/>
       {viewAllModal && <ViewAllModal title={viewAllModal.title} items={viewAllModal.items} totalCount={viewAllModal.total} onItemClick={function(item){openSpeciesDetail(item);}} onClose={function(){setViewAllModal(null);}}/>}
     </div>
